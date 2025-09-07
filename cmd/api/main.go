@@ -62,7 +62,7 @@ func main() {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 
-	storage := storage.NewSqlStorage(db)
+	storage := storage.NewSQLStorage(db)
 	storage.InitDB()
 	service := service.NewMeasurementService(storage)
 

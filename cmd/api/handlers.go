@@ -14,13 +14,19 @@ func (app *application) CreateMeasurement(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	response, err := app.service.CreateMeasurement(&req)
+	if err != nil {
+		app.errorLog.Println(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	if err := app.service.CreateMeasurement(&req); err != nil {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		app.errorLog.Println(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-
-	w.WriteHeader(http.StatusCreated)
 }
 
 func (app *application) GetAllMeasurements(w http.ResponseWriter, r *http.Request) {

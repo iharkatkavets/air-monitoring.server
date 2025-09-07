@@ -1,3 +1,4 @@
+// Package service is a helper for fetching/storing measurements
 package service
 
 import (
@@ -14,45 +15,37 @@ func NewMeasurementService(s storage.Storage) *MeasurementService {
 	return &MeasurementService{storage: s}
 }
 
+// CreateMeasurementReq represents a single measurement request payload
 type CreateMeasurementReq struct {
-	MassDensityPM1_0   float64   `json:"mass_density_pm1_0"`
-	MassDensityPM2_5   float64   `json:"mass_density_pm2_5"`
-	MassDensityPM4_0   float64   `json:"mass_density_pm4_0"`
-	MassDensityPM10    float64   `json:"mass_density_pm10"`
-	MassDensityUnit    string    `json:"mass_density_unit"`
-	ParticleCountPM0_5 float64   `json:"particle_count_pm0_5"`
-	ParticleCountPM1_0 float64   `json:"particle_count_pm1_0"`
-	ParticleCountPM2_5 float64   `json:"particle_count_pm2_5"`
-	ParticleCountPM4_0 float64   `json:"particle_count_pm4_0"`
-	ParticleCountPM10  float64   `json:"particle_count_pm10"`
-	ParticleCountUnit  string    `json:"particle_count_unit"`
-	ParticleSize       float64   `json:"particle_size"`
-	ParticleSizeUnit   string    `json:"particle_size_unit"`
-	Timestamp          time.Time `json:"timestamp"`
+	Timestamp time.Time          `json:"timestamp"`
+	Values    []MeasurementValue `json:"values"`
 }
 
-func (s *MeasurementService) CreateMeasurement(req *CreateMeasurementReq) error {
-	measurements := []models.Measurement{
-		{Sensor: models.SensorMassDensity, Parameter: models.ParameterPM1_0, Value: req.MassDensityPM1_0, Unit: req.MassDensityUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorMassDensity, Parameter: models.ParameterPM2_5, Value: req.MassDensityPM2_5, Unit: req.MassDensityUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorMassDensity, Parameter: models.ParameterPM4_0, Value: req.MassDensityPM4_0, Unit: req.MassDensityUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorMassDensity, Parameter: models.ParameterPM10, Value: req.MassDensityPM10, Unit: req.MassDensityUnit, Timestamp: req.Timestamp},
+// MeasurementValue represents a single measurement entry
+type MeasurementValue struct {
+	Type      string  `json:"type"`
+	Parameter *string `json:"parameter,omitempty"` // nil for particle_size
+	Value     float64 `json:"value"`
+	Unit      string  `json:"unit"`
+}
 
-		{Sensor: models.SensorParticleCount, Parameter: models.ParameterPM0_5, Value: req.ParticleCountPM0_5, Unit: req.ParticleCountUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorParticleCount, Parameter: models.ParameterPM1_0, Value: req.ParticleCountPM1_0, Unit: req.ParticleCountUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorParticleCount, Parameter: models.ParameterPM2_5, Value: req.ParticleCountPM2_5, Unit: req.ParticleCountUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorParticleCount, Parameter: models.ParameterPM4_0, Value: req.ParticleCountPM4_0, Unit: req.ParticleCountUnit, Timestamp: req.Timestamp},
-		{Sensor: models.SensorParticleCount, Parameter: models.ParameterPM10, Value: req.ParticleCountPM10, Unit: req.ParticleCountUnit, Timestamp: req.Timestamp},
+func (s *MeasurementService) CreateMeasurement(req *CreateMeasurementReq) ([]models.Measurement, error) {
+	response := make([]models.Measurement, 0, len(req.Values))
+	for _, v := range req.Values {
+		var m models.Measurement
+		m.Timestamp = req.Timestamp
+		m.Parameter = v.Parameter
+		m.Value = v.Value
+		m.Unit = v.Unit
+		m.Sensor = v.Type
 
-		{Sensor: models.SensorParticleSize, Parameter: models.ParameterSize, Value: req.ParticleSize, Unit: req.ParticleSizeUnit, Timestamp: req.Timestamp},
-	}
-
-	for _, measurement := range measurements {
-		if err := s.storage.CreateMeasurement(&measurement); err != nil {
-			return err
+		if err := s.storage.CreateMeasurement(&m); err != nil {
+			return nil, err
 		}
+		response = append(response, m)
 	}
-	return nil
+
+	return response, nil
 }
 
 func (s *MeasurementService) GetAllMeasurements(filters map[string]string) ([]models.Measurement, error) {

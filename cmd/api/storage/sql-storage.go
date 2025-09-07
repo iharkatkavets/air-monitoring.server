@@ -1,3 +1,4 @@
+// Package storage is responsible for storing data
 package storage
 
 import (
@@ -10,24 +11,24 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type SqlStorage struct {
+type SQLStorage struct {
 	db *sql.DB
 }
 
-func NewSqlStorage(db *sql.DB) *SqlStorage {
-	return &SqlStorage{db: db}
+func NewSQLStorage(db *sql.DB) *SQLStorage {
+	return &SQLStorage{db: db}
 }
 
-func (s *SqlStorage) InitDB() {
+func (s *SQLStorage) InitDB() {
 	s.createTables()
 }
 
-func (s *SqlStorage) createTables() {
+func (s *SQLStorage) createTables() {
 	createMeasurementTable := `
     CREATE TABLE IF NOT EXISTS measurement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sensor STRING NOT NULL,
-        parameter STRING NOT NULL,
+        parameter STRING,
         value REAL NOT NULL,
         unit STRING NOT NULL,
         timestamp DATETIME NOT NULL 
@@ -39,17 +40,25 @@ func (s *SqlStorage) createTables() {
 	}
 }
 
-func (s *SqlStorage) CreateMeasurement(m *models.Measurement) error {
+func (s *SQLStorage) CreateMeasurement(m *models.Measurement) error {
 	query := `INSERT INTO measurement 
     (sensor, parameter, value, unit, timestamp) VALUES 
     (?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(query, m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp)
-	return err
+	result, err := s.db.Exec(query, m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp)
+	if err != nil {
+		return err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	m.ID = id
+	return nil
 }
 
-func (s *SqlStorage) GetAllMeasurements(filters map[string]string) ([]models.Measurement, error) {
+func (s *SQLStorage) GetAllMeasurements(filters map[string]string) ([]models.Measurement, error) {
 	query := "SELECT id, sensor, parameter, value, unit, timestamp FROM measurement"
-	var args []interface{}
+	var args []any
 
 	var conditions []string
 	i := 1

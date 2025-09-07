@@ -8,8 +8,8 @@ import (
 func (app *application) routes() http.Handler {
 	mux := chi.NewRouter()
 
-	mux.Get("/api/measurement", app.GetAllMeasurements)
-	mux.Post("/api/measurement/create", app.CreateMeasurement)
+	mux.Get("/api/measurements", app.GetAllMeasurements)
+	mux.Post("/api/measurements", app.CreateMeasurement)
 
 	return mux
 }
