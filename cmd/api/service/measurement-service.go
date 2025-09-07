@@ -23,7 +23,7 @@ type CreateMeasurementReq struct {
 
 // MeasurementValue represents a single measurement entry
 type MeasurementValue struct {
-	Type      string  `json:"type"`
+	Sensor    string  `json:"sensor"`
 	Parameter *string `json:"parameter,omitempty"` // nil for particle_size
 	Value     float64 `json:"value"`
 	Unit      string  `json:"unit"`
@@ -37,7 +37,7 @@ func (s *MeasurementService) CreateMeasurement(req *CreateMeasurementReq) ([]mod
 		m.Parameter = v.Parameter
 		m.Value = v.Value
 		m.Unit = v.Unit
-		m.Sensor = v.Type
+		m.Sensor = v.Sensor
 
 		if err := s.storage.CreateMeasurement(&m); err != nil {
 			return nil, err
