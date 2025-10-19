@@ -1,64 +1,57 @@
-WEB_PORT=4000
-API_PORT=4001
-DB="api.db"
-ENV="development"
+PORT ?= 4001
+DB   ?= "api.db"
+ENV  ?= "development"
 
-## build: builds all binaries
-build: clean build_front build_api
-	@printf "All binaries built!\n"
+BIN_DIR := dist
+BIN := $(BIN_DIR)/api-server
+PID := $(BIN_DIR)/api.pid
 
-## clean: cleans all binaries and runs go clean
+LOG_DIR  := logs
+LOG      := $(LOG_DIR)/api.log
+
+.PHONY: build clean release start stop logs
+
+$(BIN_DIR):
+	@mkdir -p $@
+
 clean:
-	@echo "Cleaning..."
-	@- rm -f dist/*
+	@echo "[CLEAN] Start"
+	@-rm -rf $(BIN_DIR)
 	@go clean
-	@echo "Cleaned!"
+	@echo "[CLEAN] Done"
 
-## build_front: builds the front end
-build_front:
-	@echo "Building front end..."
-	@go build -o dist/web-server ./cmd/web
-	@echo "Front end built!"
+build: clean | $(BIN_DIR)
+	@echo "[BUILD_API] Start"
+	@go build -o $(BIN) ./cmd/api
+	@echo "[BUILD_API] Done"
 
-## build_api: builds the back end
-build_api:
-	@echo "Building back end..."
-	@go build -o dist/api-server ./cmd/api
-	@echo "Back end built!"
+release: | $(BIN_DIR)
+	@echo "[BUILD_RELEASE] Start"
+	@CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=musl-gcc \
+	  go build -tags "sqlite_omit_load_extension" \
+	  -trimpath -ldflags "-s -w -extldflags -static" \
+	  -o $(BIN) ./cmd/api/
+	@echo "[BUILD_RELEASE] Done"
 
-release_api:
-	@echo "Building api release..."
-	@CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=musl-gcc go build -tags "sqlite_omit_load_extension" -ldflags "-extldflags -static" -o dist/api-server ./cmd/api/
-	@echo "Back end built!"
+start: stop build 
+	@echo "[START_API] Start"
+	@mkdir -p "$(LOG_DIR)"
+	@nohup $(BIN) -port=$(PORT) -env=$(ENV) -db=$(DB) \
+	    >>"$(LOG)" 2>&1 </dev/null & echo $$! >"$(PID)"
+	@echo "PID: $$(cat $(PID))  Logs: $(LOG)"
+	@echo "[START_API] Done"
 
-## start: starts front and back end
-start: start_front start_api
-	
-## start_front: starts the front end
-start_front: build_front
-	@echo "Starting the front end..."
-	@env ./dist/web-server -port=${WEB_PORT} &
-	@echo "Front end running!"
+stop: 
+	@echo "[STOP_API] Start"
+	@if [ -f "$(PID)" ]; then \
+		kill "$$(cat $(PID))" 2>/dev/null || true; \
+		rm -f "$(PID)"; \
+	else \
+		echo "No PID file."; \
+	fi
+	@echo "[STOP_API] Done"
 
-## start_api: starts the back end
-start_api: build_api
-	@echo "Starting the back end..."
-	@env ./dist/api-server -port=${API_PORT} -db=${DB} -env=${ENV}&
-	@echo "Back end running!"
-
-## stop: stops the front and back end
-stop: stop_front stop_api
-	@echo "All applications stopped"
-
-## stop_front: stops the front end
-stop_front:
-	@echo "Stopping the front end..."
-	@-pkill -SIGTERM -f "web-server -port=${WEB_PORT}"
-	@echo "Stopped front end"
-
-## stop_api: stops the back end
-stop_api:
-	@echo "Stopping the back end..."
-	@-pkill -SIGTERM -f "api-server -port=${API_PORT}" -db=${DB} -env=${ENV}
-	@echo "Stopped back end"
+logs:
+	@echo "Tailing $(LOG)… (Ctrl-C to stop)"
+	@tail -f "$(LOG)"
 

@@ -31,13 +31,20 @@ type MeasurementValue struct {
 
 func (s *MeasurementService) CreateMeasurement(req *CreateMeasurementReq) ([]models.Measurement, error) {
 	response := make([]models.Measurement, 0, len(req.Values))
+	createdAt := time.Now().UTC()
+	currTimestamp := createdAt
 	for _, v := range req.Values {
 		var m models.Measurement
-		m.Timestamp = req.Timestamp
+		ts := req.Timestamp
+		if ts.IsZero() {
+			ts = currTimestamp
+		}
+		m.Timestamp = ts
 		m.Parameter = v.Parameter
 		m.Value = v.Value
 		m.Unit = v.Unit
 		m.Sensor = v.Sensor
+		m.CreatedAt = createdAt
 
 		if err := s.storage.CreateMeasurement(&m); err != nil {
 			return nil, err
