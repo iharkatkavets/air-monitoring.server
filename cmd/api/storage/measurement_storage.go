@@ -91,7 +91,7 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 	}
 	defer rows.Close()
 
-	var out []models.Measurement
+	out := []models.Measurement{}
 	for rows.Next() {
 		var m models.Measurement
 		if err := rows.Scan(
