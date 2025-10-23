@@ -27,7 +27,7 @@ func (m *Migrations) AddCreatedAt() error {
 	}
 
 	if count == 0 {
-		m.Logger.Println("Adding created_at column...")
+		m.Logger.Println("Adding `created_at` column...")
 
 		// Step 1: Add as NULLABLE
 		if _, err = m.DB.Exec(`ALTER TABLE measurement ADD COLUMN created_at DATETIME;`); err != nil {
@@ -45,9 +45,9 @@ func (m *Migrations) AddCreatedAt() error {
         `); err != nil {
 			log.Fatal(err)
 		}
-		m.Logger.Println("Column created_at added and backfilled.")
+		m.Logger.Println("Column `created_at` added and backfilled.")
 	} else {
-		m.Logger.Println("created_at column already exists.")
+		m.Logger.Println("Column `created_at` already exists.")
 	}
 	return nil
 }
