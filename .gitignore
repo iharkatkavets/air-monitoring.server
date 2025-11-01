@@ -50,3 +50,9 @@ node_modules/
 
 # Dependencies (if using vendoring)
 vendor/
+
+*.db
+*.db-shm
+*.db-wal
+logs/
+dist/

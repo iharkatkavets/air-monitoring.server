@@ -1,3 +1,4 @@
+// Package models provides models for fetching and inserting data
 package models
 
 import "time"
@@ -9,4 +10,5 @@ type Measurement struct {
 	Value     float64   `json:"value"`
 	Unit      string    `json:"unit"`
 	Timestamp time.Time `json:"timestamp"`
+	CreatedAt time.Time `json:"created_at"`
 }

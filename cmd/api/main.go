@@ -1,15 +1,18 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"flag"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"sensor/cmd/api/db"
 	"sensor/cmd/api/service"
 	"sensor/cmd/api/storage"
+	"syscall"
 	"time"
 )
 
@@ -27,9 +30,10 @@ type application struct {
 	errorLog *log.Logger
 	version  string
 	service  *service.MeasurementService
+	storage  *storage.SQLStorage
 }
 
-func (app *application) serve() error {
+func (app *application) serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", app.config.port),
 		Handler:           app.routes(),
@@ -38,45 +42,96 @@ func (app *application) serve() error {
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Second,
 	}
-	app.infoLog.Printf("Starting Backend server in %s mode on port %d", app.config.env, app.config.port)
-	return srv.ListenAndServe()
+
+	// Server errors channel
+	errCh := make(chan error, 1)
+
+	// Start server
+	go func() {
+		app.infoLog.Printf("Starting %s server on %s (v%s)", app.config.env, srv.Addr, app.version)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	// Wait for ctx cancellation or server error
+	select {
+	case <-ctx.Done():
+		// Begin graceful shutdown
+		app.infoLog.Println("Shutdown signal received, shutting down server...")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			// If graceful shutdown times out, force close
+			app.errorLog.Printf("graceful shutdown failed: %v; forcing close", err)
+			_ = srv.Close()
+		}
+
+		// Ensure the serve goroutine returns
+		return <-errCh
+
+	case err := <-errCh:
+		// Server crashed on startup or runtime
+		return err
+	}
 }
 
 func main() {
 	var cfg config
 	flag.IntVar(&cfg.port, "port", 4001, "Server port to listen on")
 	flag.StringVar(&cfg.env, "env", "development", "Application environment {development|production}")
-	flag.StringVar(&cfg.db, "db", "api.db", "The path do db file")
+	flag.StringVar(&cfg.db, "db", "api.db", "The path to db file")
 
 	flag.Parse()
 
 	infoLog := log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime)
 	errorLog := log.New(os.Stdout, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
 
-	db, err := sql.Open("sqlite3", "api.db")
+	database, err := db.NewDB(cfg.db)
 	if err != nil {
 		errorLog.Println(err)
 		log.Fatal(err)
 	}
+	defer database.Close()
 
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	store := storage.NewSQLStorage(database)
+	if err := store.InitDB(); err != nil {
+		errorLog.Println(err)
+		log.Fatal(err)
+	}
 
-	storage := storage.NewSQLStorage(db)
-	storage.InitDB()
-	service := service.NewMeasurementService(storage)
+	m := storage.NewMigrations(database, infoLog)
+	if err := m.Run(); err != nil {
+		errorLog.Println(err)
+		log.Fatal(err)
+	}
+
+	svc := service.NewMeasurementService(store)
 
 	app := &application{
 		config:   cfg,
 		infoLog:  infoLog,
 		errorLog: errorLog,
 		version:  version,
-		service:  service,
+		service:  svc,
+		storage:  store,
 	}
 
-	err = app.serve()
-	if err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.serve(ctx); err != nil {
 		app.errorLog.Println(err)
-		log.Fatal(err)
+		errorLog.Fatal(err)
 	}
+
+	if err := database.Close(); err != nil {
+		errorLog.Printf("db close error: %v", err)
+	}
+
+	infoLog.Println("Shutdown complete")
 }
