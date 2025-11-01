@@ -3,12 +3,14 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sensor/cmd/api/models"
 	"sensor/cmd/api/pagination"
 	"sensor/cmd/api/service"
 	"sensor/cmd/api/storage"
+	"time"
 
 	"strconv"
 )
@@ -24,7 +26,7 @@ func NewMeasurementHandler(service *service.MeasurementService, infoLog *log.Log
 	return &MeasurementHandler{service: service, infoLog: infoLog, errorLog: errorLog, storage: storage}
 }
 
-func (app *MeasurementHandler) CreateMeasurement(w http.ResponseWriter, r *http.Request) {
+func (app *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req service.CreateMeasurementReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		app.errorLog.Println(err)
@@ -46,42 +48,13 @@ func (app *MeasurementHandler) CreateMeasurement(w http.ResponseWriter, r *http.
 	}
 }
 
-/*
-func (app *MeasurementHandler) GetAllMeasurements(w http.ResponseWriter, r *http.Request) {
-	filters := make(map[string]string)
-	queryParams := r.URL.Query()
-	for key, values := range queryParams {
-		if len(values) > 0 && len(key) > 7 && key[:7] == "filter[" {
-			field := key[7 : len(key)-1]
-			filters[field] = values[0]
-		}
-	}
-	readings, err := app.service.GetAllMeasurements(filters)
-	if err != nil {
-		app.errorLog.Println(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	err = json.NewEncoder(w).Encode(readings)
-	if err != nil {
-		app.errorLog.Println("Failed to encode JSON:", err)
-		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
-		return
-	}
-}
-*/
-
 type pageResponse struct {
 	Items      []models.Measurement `json:"items"`
 	NextCursor string               `json:"next_cursor,omitempty"`
 	HasMore    bool                 `json:"has_more"`
 }
 
-func (app *MeasurementHandler) GetAllMeasurements(w http.ResponseWriter, r *http.Request) {
+func (app *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 200 {
@@ -99,7 +72,6 @@ func (app *MeasurementHandler) GetAllMeasurements(w http.ResponseWriter, r *http
 		cur = &c
 	}
 
-	// fetch
 	items, err := app.storage.GetMeasurementsPage(limit, cur)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -127,4 +99,66 @@ func (app *MeasurementHandler) GetAllMeasurements(w http.ResponseWriter, r *http
 		NextCursor: nextCursor,
 		HasMore:    hasMore,
 	})
+}
+
+type SSEData struct {
+	Items []models.Measurement `json:"items"`
+}
+
+func (app *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
+	app.infoLog.Println("A client has connected")
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	defer app.infoLog.Println("A client has disconnected")
+
+	ctx := r.Context()
+
+	lastID, err := app.storage.GetLastID()
+	if err != nil {
+		app.errorLog.Printf("Failed to fetch id from database %v", err.Error())
+		http.Error(w, "internal erro", http.StatusInternalServerError)
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			measurements, outID, err := app.storage.GetMeasurementsAfterID(ctx, lastID, 100)
+			if err != nil {
+				app.errorLog.Printf("Failed to fetch measurements %v", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if len(measurements) == 0 {
+				continue
+			}
+			b, err := json.Marshal(SSEData{Items: measurements})
+			if err != nil {
+				app.errorLog.Printf("Failed to encode measurements to JSON %v", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if _, err := fmt.Fprintf(w, "event: measurements\ndata: %s\n\n", string(b)); err != nil {
+				app.errorLog.Printf("Failed to write %v", err.Error())
+				return
+			}
+			flusher.Flush()
+			lastID = outID
+		}
+	}
 }

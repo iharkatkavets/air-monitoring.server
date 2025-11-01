@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"context"
+	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -105,4 +107,54 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *SQLStorage) GetLastID() (int64, error) {
+	q := `SELECT id FROM measurement ORDER BY id DESC LIMIT 1`
+	row := s.DB.QueryRow(q)
+
+	var id int64
+	err := row.Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	return id, nil
+}
+
+func (s *SQLStorage) GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]models.Measurement, int64, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	q := `
+        SELECT id, sensor, COALESCE(parameter, ''), value, unit, timestamp, created_at
+        FROM measurement
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT ?
+    `
+	rows, err := s.DB.QueryContext(ctx, q, afterID, limit+1)
+	if err != nil {
+		return nil, afterID, err
+	}
+	defer rows.Close()
+
+	out := make([]models.Measurement, 0, limit)
+	outID := afterID
+	for rows.Next() {
+		var m models.Measurement
+		if err := rows.Scan(&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &m.Timestamp, &m.CreatedAt); err != nil {
+			return nil, afterID, err
+		}
+		out = append(out, m)
+		outID = m.ID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, afterID, err
+	}
+
+	return out, outID, nil
 }

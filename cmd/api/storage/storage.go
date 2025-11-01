@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
 	"sensor/cmd/api/models"
@@ -9,6 +10,8 @@ import (
 type Storage interface {
 	CreateMeasurement(m *models.Measurement) error
 	GetAllMeasurements(filters map[string]string) ([]models.Measurement, error)
+	GetLastID() (int64, error)
+	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]models.Measurement, int64, error)
 }
 
 type SQLStorage struct {

@@ -40,10 +40,9 @@ func (app *application) serve(ctx context.Context) error {
 		IdleTimeout:       30 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      5 * time.Second,
+		WriteTimeout:      0,
 	}
 
-	// Server errors channel
 	errCh := make(chan error, 1)
 
 	// Start server
