@@ -13,8 +13,11 @@ func (app *application) routes() http.Handler {
 	measurementHandler := handler.NewMeasurementHandler(app.service, app.infoLog, app.errorLog, app.storage)
 
 	mux.Get("/health", handler.HealthCheck)
-	mux.Get("/api/measurements", measurementHandler.GetAllMeasurements)
-	mux.Post("/api/measurements", measurementHandler.CreateMeasurement)
+	mux.Route("/api/measurements", func(r chi.Router) {
+		r.Get("/", measurementHandler.List)
+		r.Post("/", measurementHandler.Create)
+		r.Get("/stream", measurementHandler.Stream)
+	})
 
 	return mux
 }
