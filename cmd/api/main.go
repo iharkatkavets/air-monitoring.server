@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +14,8 @@ import (
 	"sensor/cmd/api/storage"
 	"syscall"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const version = "1.0.0"
@@ -33,50 +35,53 @@ type application struct {
 	storage  *storage.SQLStorage
 }
 
-func (app *application) serve(ctx context.Context) error {
+func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration) error {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", app.config.port),
 		Handler:           app.routes(),
 		IdleTimeout:       30 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      0,
+		WriteTimeout:      0, // for SSE/Long Pooling
 	}
 
-	errCh := make(chan error, 1)
+	serverErr := make(chan error, 1)
 
-	// Start server
 	go func() {
 		app.infoLog.Printf("Starting %s server on %s (v%s)", app.config.env, srv.Addr, app.version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
-			return
+			serverErr <- err
 		}
-		errCh <- nil
+		close(serverErr)
 	}()
 
-	// Wait for ctx cancellation or server error
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
 	select {
-	case <-ctx.Done():
-		// Begin graceful shutdown
+	case err := <-serverErr:
+		return err
+	case <-stop:
 		app.infoLog.Println("Shutdown signal received, shutting down server...")
+	case <-ctx.Done():
+		app.infoLog.Println("Context cancelled")
+	}
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		shutdownTimeout,
+	)
+	defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			// If graceful shutdown times out, force close
-			app.errorLog.Printf("graceful shutdown failed: %v; forcing close", err)
-			_ = srv.Close()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		if closeErr := srv.Close(); closeErr != nil {
+			return errors.Join(err, closeErr)
 		}
-
-		// Ensure the serve goroutine returns
-		return <-errCh
-
-	case err := <-errCh:
-		// Server crashed on startup or runtime
 		return err
 	}
+	app.infoLog.Println("Server shutdown gracefully")
+
+	return nil
 }
 
 func main() {
@@ -120,10 +125,8 @@ func main() {
 		storage:  store,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	if err := app.serve(ctx); err != nil {
+	shutdownTimeout := time.Second * 3
+	if err := app.serve(context.Background(), shutdownTimeout); err != nil {
 		app.errorLog.Println(err)
 		errorLog.Fatal(err)
 	}
