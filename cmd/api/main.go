@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sensor/cmd/api/db"
 	"sensor/cmd/api/service"
+	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
 	"syscall"
 	"time"
@@ -33,6 +34,7 @@ type application struct {
 	version  string
 	service  *service.MeasurementService
 	storage  *storage.SQLStorage
+	settings *settings.SettingsCache
 }
 
 func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration) error {
@@ -44,6 +46,9 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0, // for SSE/Long Pooling
 	}
+
+	storageCleaner := storage.NewStorageCleaner(app.storage, app.infoLog, app.errorLog)
+	storageCleaner.StartCleanupJob(ctx, time.Second*15)
 
 	serverErr := make(chan error, 1)
 
@@ -103,7 +108,8 @@ func main() {
 	defer database.Close()
 
 	store := storage.NewSQLStorage(database)
-	if err := store.InitDB(); err != nil {
+	ctx := context.Background()
+	if err := store.InitDB(ctx); err != nil {
 		errorLog.Println(err)
 		log.Fatal(err)
 	}
@@ -115,6 +121,8 @@ func main() {
 	}
 
 	svc := service.NewMeasurementService(store)
+	var settingsCache settings.SettingsCache
+	InitSettings(store, &settingsCache)
 
 	app := &application{
 		config:   cfg,
@@ -123,10 +131,11 @@ func main() {
 		version:  version,
 		service:  svc,
 		storage:  store,
+		settings: &settingsCache,
 	}
 
 	shutdownTimeout := time.Second * 3
-	if err := app.serve(context.Background(), shutdownTimeout); err != nil {
+	if err := app.serve(ctx, shutdownTimeout); err != nil {
 		app.errorLog.Println(err)
 		errorLog.Fatal(err)
 	}
@@ -136,4 +145,17 @@ func main() {
 	}
 
 	infoLog.Println("Shutdown complete")
+}
+
+func InitSettings(storage *storage.SQLStorage, obj *settings.SettingsCache) error {
+	valStr, ok := settings.DefaultSettings[settings.SettingKeyStoreInterval]
+	if !ok {
+		return errors.New("no default value for ")
+	}
+	valDuration, err := time.ParseDuration(valStr)
+	if err != nil {
+		return err
+	}
+	obj.SetStoreInteval(valDuration)
+	return nil
 }

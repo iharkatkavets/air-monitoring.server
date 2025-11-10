@@ -12,6 +12,7 @@ func (app *application) routes() http.Handler {
 
 	measurementHandler := handler.NewMeasurementHandler(app.service, app.infoLog, app.errorLog, app.storage)
 	slowHandler := handler.NewSlowHandler(app.infoLog)
+	settingsHandler := handler.NewSettingsHandler(app.infoLog, app.errorLog, app.storage)
 
 	mux.Get("/health", handler.HealthCheck)
 	mux.Get("/slow", slowHandler.SlowResponse)
@@ -19,6 +20,11 @@ func (app *application) routes() http.Handler {
 		r.Get("/", measurementHandler.List)
 		r.Post("/", measurementHandler.Create)
 		r.Get("/stream", measurementHandler.Stream)
+	})
+	mux.Route("/api/settings", func(r chi.Router) {
+		r.Get("/", settingsHandler.GetAllSettings)
+		r.Get("/{key}", settingsHandler.GetSetting)
+		r.Post("/{key}", settingsHandler.UpdateSetting)
 	})
 
 	return mux

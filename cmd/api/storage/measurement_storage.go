@@ -12,6 +12,13 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+type Storage interface {
+	CreateMeasurement(m *models.Measurement) error
+	GetAllMeasurements(filters map[string]string) ([]models.Measurement, error)
+	GetLastID() (int64, error)
+	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]models.Measurement, int64, error)
+}
+
 func (s *SQLStorage) CreateMeasurement(m *models.Measurement) error {
 	query := `INSERT INTO measurement 
     (sensor, parameter, value, unit, timestamp, created_at) VALUES 
