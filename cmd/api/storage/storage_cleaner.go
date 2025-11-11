@@ -3,17 +3,19 @@ package storage
 import (
 	"context"
 	"log"
+	"sensor/cmd/api/settings"
 	"time"
 )
 
 type StorageCleaner struct {
-	storage *SQLStorage
-	infoLog *log.Logger
-	errLog  *log.Logger
+	storage  *SQLStorage
+	infoLog  *log.Logger
+	errLog   *log.Logger
+	settings *settings.SettingsCache
 }
 
-func NewStorageCleaner(storage *SQLStorage, infoLog *log.Logger, errLog *log.Logger) *StorageCleaner {
-	return &StorageCleaner{storage: storage, infoLog: infoLog, errLog: errLog}
+func NewStorageCleaner(storage *SQLStorage, infoLog *log.Logger, errLog *log.Logger, settings *settings.SettingsCache) *StorageCleaner {
+	return &StorageCleaner{storage: storage, infoLog: infoLog, errLog: errLog, settings: settings}
 }
 
 func (c *StorageCleaner) StartCleanupJob(ctx context.Context, interval time.Duration) {
@@ -39,15 +41,7 @@ func (c *StorageCleaner) StartCleanupJob(ctx context.Context, interval time.Dura
 
 func (c *StorageCleaner) cleanupOnce(ctx context.Context) error {
 	for {
-		maxAge, err := c.storage.GetSetting(ctx, "maxage")
-		if err != nil {
-			return err
-		}
-		duration, err := time.ParseDuration(maxAge.Value)
-		if err != nil {
-			return err
-		}
-		cutOffTime := time.Now().Add(duration)
+		cutOffTime := time.Now().Add(-c.settings.GetMaxAge())
 		res, err := c.storage.DB.ExecContext(ctx, `
         DELETE FROM measurement WHERE rowid IN (
             SELECT id FROM measurement WHERE "timestamp" < ? LIMIT 500

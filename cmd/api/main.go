@@ -10,13 +10,13 @@ import (
 	"os"
 	"os/signal"
 	"sensor/cmd/api/db"
-	"sensor/cmd/api/service"
 	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"strconv"
 )
 
 const version = "1.0.0"
@@ -32,7 +32,6 @@ type application struct {
 	infoLog  *log.Logger
 	errorLog *log.Logger
 	version  string
-	service  *service.MeasurementService
 	storage  *storage.SQLStorage
 	settings *settings.SettingsCache
 }
@@ -47,7 +46,7 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		WriteTimeout:      0, // for SSE/Long Pooling
 	}
 
-	storageCleaner := storage.NewStorageCleaner(app.storage, app.infoLog, app.errorLog)
+	storageCleaner := storage.NewStorageCleaner(app.storage, app.infoLog, app.errorLog, app.settings)
 	storageCleaner.StartCleanupJob(ctx, time.Second*15)
 
 	serverErr := make(chan error, 1)
@@ -120,16 +119,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	svc := service.NewMeasurementService(store)
 	var settingsCache settings.SettingsCache
-	InitSettings(store, &settingsCache)
+	InitSettings(ctx, store, &settingsCache)
 
 	app := &application{
 		config:   cfg,
 		infoLog:  infoLog,
 		errorLog: errorLog,
 		version:  version,
-		service:  svc,
 		storage:  store,
 		settings: &settingsCache,
 	}
@@ -147,15 +144,37 @@ func main() {
 	infoLog.Println("Shutdown complete")
 }
 
-func InitSettings(storage *storage.SQLStorage, obj *settings.SettingsCache) error {
-	valStr, ok := settings.DefaultSettings[settings.SettingKeyStoreInterval]
-	if !ok {
-		return errors.New("no default value for ")
+func InitSettings(ctx context.Context, storage *storage.SQLStorage, obj *settings.SettingsCache) error {
+	for key, defVal := range settings.DefaultSettings {
+		item, err := storage.GetSetting(ctx, key)
+		if err != nil {
+			return fmt.Errorf("get setting %s: %w", key, err)
+		}
+
+		valStr := defVal
+		if item != nil {
+			valStr = item.Value
+		} else {
+			if _, err := storage.UpsertSetting(ctx, key, defVal); err != nil {
+				return fmt.Errorf("upsert default %s: %w", key, err)
+			}
+		}
+
+		switch key {
+		case settings.SettingKeyStoreInterval:
+			d, err := strconv.ParseInt(valStr, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			obj.SetStoreInterval(time.Duration(d))
+
+		case settings.SettingKeyMaxAge:
+			d, err := strconv.ParseInt(valStr, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			obj.SetMaxAge(time.Duration(d))
+		}
 	}
-	valDuration, err := time.ParseDuration(valStr)
-	if err != nil {
-		return err
-	}
-	obj.SetStoreInteval(valDuration)
 	return nil
 }

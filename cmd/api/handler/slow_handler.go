@@ -16,7 +16,7 @@ func NewSlowHandler(infoLog *log.Logger) *SlowHandler {
 	return &SlowHandler{infoLog: infoLog}
 }
 
-func (h *SlowHandler) SlowResponse(w http.ResponseWriter, r *http.Request) {
+func (h *SlowHandler) MakeItSlow(w http.ResponseWriter, r *http.Request) {
 	h.infoLog.Println("Slow response started")
 	time.Sleep(time.Second * 8)
 	end := time.Now()
