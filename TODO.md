@@ -1,19 +1,16 @@
-# Project Notes
+# Project TODOS
 
 ## In Progress
 
-- [ ] [Implement graceful shutdown](https://youtu.be/UPVSeZXBTxI)
+- [ ] Implement database cleanup via settings passed from client(maxAge, storeInterval)
 
 ## Planned
 
 - [ ] Update README with setup instructions
-- [ ] Database cleanup
 - [ ] Fix error 'measurement_handler.go:38: database is locked'
-
 
 ## Completed
 
 - [+] Implement cursor pagination
 - [+] Implement streaming API
-
--
+- [+] [Implement graceful shutdown](https://youtu.be/UPVSeZXBTxI)

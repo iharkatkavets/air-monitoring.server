@@ -2,7 +2,7 @@
 package settings
 
 const (
-	SettingKeyMaxAge        = "maxage"
+	SettingKeyMaxAge        = "max_age"
 	SettingKeyStoreInterval = "store_interval"
 )
 

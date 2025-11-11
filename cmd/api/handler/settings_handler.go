@@ -98,31 +98,33 @@ func (h *SettingsHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) 
 	defer r.Body.Close()
 
 	if len(key) == 0 {
+		h.errorLog.Printf("Invalid key '%s'", key)
 		http.Error(w, fmt.Sprintf("Invalid key '%s'", key), http.StatusBadRequest)
 		return
 	}
 
 	var body SettingInputValue
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.errorLog.Println("Invalid JSON")
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	item, err := h.storage.UpsertSetting(r.Context(), key, body.Value)
 	if err != nil {
-		h.errorLog.Println(err)
+		h.errorLog.Printf("Failed to update settings for key '%s' %v", key, err)
 		http.Error(w, "Internal Server error", http.StatusInternalServerError)
 		return
 	}
 	if item == nil {
-		h.errorLog.Println(err)
+		h.errorLog.Printf("It shouldn't be nil here. Key '%s'", key)
 		http.Error(w, "Internal Server error", http.StatusInternalServerError)
 		return
 	}
 
 	switch key {
 	case settings.SettingKeyStoreInterval:
-		duration, err := strconv.ParseInt(item.Value, 10, 64)
+		duration, err := strconv.ParseFloat(item.Value, 64)
 		if err != nil {
 			h.errorLog.Printf("Failed to parse store interval %s %v", item.Value, err)
 			http.Error(w, "Internal Server error", http.StatusInternalServerError)
@@ -131,7 +133,7 @@ func (h *SettingsHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) 
 		h.settings.SetStoreInterval(time.Duration(duration))
 		h.infoLog.Printf("Apply new store interval %s", item.Value)
 	case settings.SettingKeyMaxAge:
-		duration, err := strconv.ParseInt(item.Value, 10, 64)
+		duration, err := strconv.ParseFloat(item.Value, 64)
 		if err != nil {
 			h.errorLog.Printf("Failed to parse max age %s %v", item.Value, err)
 			http.Error(w, "Internal Server error", http.StatusInternalServerError)

@@ -162,14 +162,14 @@ func InitSettings(ctx context.Context, storage *storage.SQLStorage, obj *setting
 
 		switch key {
 		case settings.SettingKeyStoreInterval:
-			d, err := strconv.ParseInt(valStr, 10, 64)
+			d, err := strconv.ParseFloat(valStr, 64)
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", key, err)
 			}
 			obj.SetStoreInterval(time.Duration(d))
 
 		case settings.SettingKeyMaxAge:
-			d, err := strconv.ParseInt(valStr, 10, 64)
+			d, err := strconv.ParseFloat(valStr, 64)
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", key, err)
 			}
