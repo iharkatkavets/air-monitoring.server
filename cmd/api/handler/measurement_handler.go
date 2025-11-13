@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sensor/cmd/api/models"
 	"sensor/cmd/api/pagination"
-	"sensor/cmd/api/service"
+	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
 	"time"
 
@@ -16,35 +16,76 @@ import (
 )
 
 type MeasurementHandler struct {
-	service  *service.MeasurementService
-	infoLog  *log.Logger
-	errorLog *log.Logger
-	storage  *storage.SQLStorage
+	infoLog        *log.Logger
+	errorLog       *log.Logger
+	storage        *storage.SQLStorage
+	settings       *settings.SettingsCache
+	prevRecordTime time.Time
 }
 
-func NewMeasurementHandler(service *service.MeasurementService, infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage) *MeasurementHandler {
-	return &MeasurementHandler{service: service, infoLog: infoLog, errorLog: errorLog, storage: storage}
+func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *MeasurementHandler {
+	prevRecordTime := time.Now().Add(-settings.GetStoreInterval())
+	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, prevRecordTime: prevRecordTime}
 }
 
-func (app *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req service.CreateMeasurementReq
+type CreateMeasurementReq struct {
+	Timestamp time.Time          `json:"timestamp"`
+	Values    []MeasurementValue `json:"values"`
+}
+
+type MeasurementValue struct {
+	Sensor    string  `json:"sensor"`
+	Parameter *string `json:"parameter,omitempty"` // nil for particle_size
+	Value     float64 `json:"value"`
+	Unit      string  `json:"unit"`
+}
+
+func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req CreateMeasurementReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		app.errorLog.Println(err)
+		h.errorLog.Println(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	response, err := app.service.CreateMeasurement(&req)
-	if err != nil {
-		app.errorLog.Println(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		app.errorLog.Println(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	currTimestamp := time.Now().UTC()
+	timeSincePrevAdd := currTimestamp.Sub(h.prevRecordTime)
+	storeInterval := h.settings.GetStoreInterval()
+	if timeSincePrevAdd >= storeInterval {
+		h.prevRecordTime = currTimestamp
+		response := make([]models.Measurement, 0, len(req.Values))
+		for _, v := range req.Values {
+			var m models.Measurement
+			ts := req.Timestamp
+			if ts.IsZero() {
+				ts = currTimestamp
+			}
+			m.Timestamp = ts
+			m.Parameter = v.Parameter
+			m.Value = v.Value
+			m.Unit = v.Unit
+			m.Sensor = v.Sensor
+			m.CreatedAt = currTimestamp
+
+			if err := h.storage.CreateMeasurement(&m); err != nil {
+				h.errorLog.Println(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			response = append(response, m)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			h.errorLog.Println(err)
+		}
+	} else {
+		remaining := storeInterval - timeSincePrevAdd
+		h.infoLog.Printf("Skip storing. remaining=%s elapsed=%s interval=%s", remaining.Round(time.Second), timeSincePrevAdd.Round(time.Second), storeInterval.Round(time.Second))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		http.NoBody.WriteTo(w)
 	}
 }
 
@@ -54,7 +95,7 @@ type pageResponse struct {
 	HasMore    bool                 `json:"has_more"`
 }
 
-func (app *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
+func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 200 {
@@ -72,7 +113,7 @@ func (app *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 		cur = &c
 	}
 
-	items, err := app.storage.GetMeasurementsPage(limit, cur)
+	items, err := h.storage.GetMeasurementsPage(limit, cur)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -105,8 +146,8 @@ type SSEData struct {
 	Items []models.Measurement `json:"items"`
 }
 
-func (app *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
-	app.infoLog.Println("A client has connected")
+func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
+	h.infoLog.Println("A client has connected")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -122,13 +163,13 @@ func (app *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	defer app.infoLog.Println("A client has disconnected")
+	defer h.infoLog.Println("A client has disconnected")
 
 	ctx := r.Context()
 
-	lastID, err := app.storage.GetLastID()
+	lastID, err := h.storage.GetLastID()
 	if err != nil {
-		app.errorLog.Printf("Failed to fetch id from database %v", err.Error())
+		h.errorLog.Printf("Failed to fetch id from database %v", err.Error())
 		http.Error(w, "internal erro", http.StatusInternalServerError)
 		return
 	}
@@ -138,9 +179,9 @@ func (app *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			measurements, outID, err := app.storage.GetMeasurementsAfterID(ctx, lastID, 100)
+			measurements, outID, err := h.storage.GetMeasurementsAfterID(ctx, lastID, 100)
 			if err != nil {
-				app.errorLog.Printf("Failed to fetch measurements %v", err.Error())
+				h.errorLog.Printf("Failed to fetch measurements %v", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -149,12 +190,12 @@ func (app *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			b, err := json.Marshal(SSEData{Items: measurements})
 			if err != nil {
-				app.errorLog.Printf("Failed to encode measurements to JSON %v", err.Error())
+				h.errorLog.Printf("Failed to encode measurements to JSON %v", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			if _, err := fmt.Fprintf(w, "event: measurements\ndata: %s\n\n", string(b)); err != nil {
-				app.errorLog.Printf("Failed to write %v", err.Error())
+				h.errorLog.Printf("Failed to write %v", err.Error())
 				return
 			}
 			flusher.Flush()

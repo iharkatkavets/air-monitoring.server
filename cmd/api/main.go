@@ -10,12 +10,13 @@ import (
 	"os"
 	"os/signal"
 	"sensor/cmd/api/db"
-	"sensor/cmd/api/service"
+	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"strconv"
 )
 
 const version = "1.0.0"
@@ -31,8 +32,8 @@ type application struct {
 	infoLog  *log.Logger
 	errorLog *log.Logger
 	version  string
-	service  *service.MeasurementService
 	storage  *storage.SQLStorage
+	settings *settings.SettingsCache
 }
 
 func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration) error {
@@ -44,6 +45,9 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0, // for SSE/Long Pooling
 	}
+
+	storageCleaner := storage.NewStorageCleaner(app.storage, app.infoLog, app.errorLog, app.settings)
+	storageCleaner.StartCleanupJob(ctx, time.Second*15)
 
 	serverErr := make(chan error, 1)
 
@@ -103,7 +107,8 @@ func main() {
 	defer database.Close()
 
 	store := storage.NewSQLStorage(database)
-	if err := store.InitDB(); err != nil {
+	ctx := context.Background()
+	if err := store.InitDB(ctx); err != nil {
 		errorLog.Println(err)
 		log.Fatal(err)
 	}
@@ -114,19 +119,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	svc := service.NewMeasurementService(store)
+	var settingsCache settings.SettingsCache
+	InitSettings(ctx, store, &settingsCache)
 
 	app := &application{
 		config:   cfg,
 		infoLog:  infoLog,
 		errorLog: errorLog,
 		version:  version,
-		service:  svc,
 		storage:  store,
+		settings: &settingsCache,
 	}
 
 	shutdownTimeout := time.Second * 3
-	if err := app.serve(context.Background(), shutdownTimeout); err != nil {
+	if err := app.serve(ctx, shutdownTimeout); err != nil {
 		app.errorLog.Println(err)
 		errorLog.Fatal(err)
 	}
@@ -136,4 +142,39 @@ func main() {
 	}
 
 	infoLog.Println("Shutdown complete")
+}
+
+func InitSettings(ctx context.Context, storage *storage.SQLStorage, obj *settings.SettingsCache) error {
+	for key, defVal := range settings.DefaultSettings {
+		item, err := storage.GetSetting(ctx, key)
+		if err != nil {
+			return fmt.Errorf("get setting %s: %w", key, err)
+		}
+
+		valStr := defVal
+		if item != nil {
+			valStr = item.Value
+		} else {
+			if _, err := storage.UpsertSetting(ctx, key, defVal); err != nil {
+				return fmt.Errorf("upsert default %s: %w", key, err)
+			}
+		}
+
+		switch key {
+		case settings.SettingKeyStoreInterval:
+			seconds, err := strconv.ParseFloat(valStr, 64)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			obj.SetStoreInterval(time.Duration(seconds * float64(time.Second)))
+
+		case settings.SettingKeyMaxAge:
+			seconds, err := strconv.ParseFloat(valStr, 64)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			obj.SetMaxAge(time.Duration(seconds * float64(time.Second)))
+		}
+	}
+	return nil
 }
