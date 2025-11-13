@@ -20,7 +20,7 @@ type SettingsStorage interface {
 }
 
 func (s *SQLStorage) GetAllSettings(ctx context.Context) ([]SettingItem, error) {
-	query := `SELECT key, value, updated_at FROM settings ORDER BY key`
+	query := `SELECT key, value, updated_at_unix FROM settings ORDER BY key`
 	rows, err := s.DB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -28,11 +28,13 @@ func (s *SQLStorage) GetAllSettings(ctx context.Context) ([]SettingItem, error) 
 	defer rows.Close()
 
 	var out []SettingItem
+	var updatedAtUnix int64
 	for rows.Next() {
 		var item SettingItem
-		if err := rows.Scan(&item.Key, &item.Value, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.Key, &item.Value, &updatedAtUnix); err != nil {
 			return nil, err
 		}
+		item.UpdatedAt = time.Unix(updatedAtUnix, 0).UTC()
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -43,40 +45,37 @@ func (s *SQLStorage) GetAllSettings(ctx context.Context) ([]SettingItem, error) 
 }
 
 func (s *SQLStorage) GetSetting(ctx context.Context, key string) (*SettingItem, error) {
-	query := `SELECT key, value, updated_at FROM settings WHERE key = ?`
-
+	query := `SELECT key, value, updated_at_unix FROM settings WHERE key = ?`
 	row := s.DB.QueryRowContext(ctx, query, key)
-
 	var item SettingItem
-	if err := row.Scan(&item.Key, &item.Value, &item.UpdatedAt); err != nil {
+	var updatedAtUnix int64
+	if err := row.Scan(&item.Key, &item.Value, &updatedAtUnix); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // not found
 		}
 		return nil, err
 	}
-
+	item.UpdatedAt = time.Unix(updatedAtUnix, 0).UTC()
 	return &item, nil
 }
 
 func (s *SQLStorage) UpsertSetting(ctx context.Context, key, value string) (*SettingItem, error) {
 	query := `
-	INSERT INTO settings (key, value, updated_at)
-	VALUES (?, ?, CURRENT_TIMESTAMP)
+	INSERT INTO settings (key, value, updated_at_unix)
+	VALUES (?, ?, strftime('%s', 'now'))
 	ON CONFLICT(key) DO UPDATE
 	SET value = excluded.value,
-	    updated_at = CURRENT_TIMESTAMP;
+	    updated_at_unix = strftime('%s', 'now');
 	`
-
 	if _, err := s.DB.ExecContext(ctx, query, key, value); err != nil {
 		return nil, err
 	}
-
-	row := s.DB.QueryRowContext(ctx, `SELECT key, value, updated_at FROM settings WHERE key = ?`, key)
-
+	row := s.DB.QueryRowContext(ctx, `SELECT key, value, updated_at_unix FROM settings WHERE key = ?`, key)
 	var item SettingItem
-	if err := row.Scan(&item.Key, &item.Value, &item.UpdatedAt); err != nil {
+	var updatedAtUnix int64
+	if err := row.Scan(&item.Key, &item.Value, &updatedAtUnix); err != nil {
 		return nil, err
 	}
-
+	item.UpdatedAt = time.Unix(updatedAtUnix, 0).UTC()
 	return &item, nil
 }

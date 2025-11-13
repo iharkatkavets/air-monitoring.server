@@ -41,12 +41,17 @@ func (c *StorageCleaner) StartCleanupJob(ctx context.Context, interval time.Dura
 
 func (c *StorageCleaner) cleanupOnce(ctx context.Context) error {
 	for {
-		cutOffTime := time.Now().Add(-c.settings.GetMaxAge())
+		maxAge := c.settings.GetMaxAge()
+		cutOffTime := time.Now().UTC().Add(-maxAge)
 		res, err := c.storage.DB.ExecContext(ctx, `
-        DELETE FROM measurement WHERE rowid IN (
-            SELECT id FROM measurement WHERE "timestamp" < ? LIMIT 500
+        DELETE FROM measurement 
+        WHERE id IN (
+            SELECT id FROM measurement 
+            WHERE "timestamp_unix" < ? 
+            ORDER BY "timestamp_unix"
+            LIMIT 500
         )
-        `, cutOffTime)
+        `, cutOffTime.Unix())
 		if err != nil {
 			return err
 		}
@@ -54,7 +59,7 @@ func (c *StorageCleaner) cleanupOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.infoLog.Printf("Cleanup %d records with timestamp after %s", n, cutOffTime.Format(time.RFC3339))
+		c.infoLog.Printf("Cleanup %d records with timestamp_unix before %s max_age %s", n, cutOffTime.Format(time.RFC3339), maxAge.Round(time.Second))
 		if n == 0 {
 			return nil
 		}

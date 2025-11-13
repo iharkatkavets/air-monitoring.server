@@ -4,26 +4,25 @@ package storage
 import (
 	"sensor/cmd/api/models"
 	"sensor/cmd/api/pagination"
-	"strconv"
-	"strings"
+	"time"
 
 	"context"
 	"database/sql"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Storage interface {
 	CreateMeasurement(m *models.Measurement) error
-	GetAllMeasurements(filters map[string]string) ([]models.Measurement, error)
 	GetLastID() (int64, error)
 	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]models.Measurement, int64, error)
 }
 
 func (s *SQLStorage) CreateMeasurement(m *models.Measurement) error {
 	query := `INSERT INTO measurement 
-    (sensor, parameter, value, unit, timestamp, created_at) VALUES 
+    (sensor, parameter, value, unit, timestamp_unix, created_at_unix) VALUES 
     (?, ?, ?, ?, ?, ?)`
-	result, err := s.DB.Exec(query, m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp, m.CreatedAt)
+	result, err := s.DB.Exec(query, m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp.UTC().Unix(), m.CreatedAt.UTC().Unix())
 	if err != nil {
 		return err
 	}
@@ -33,41 +32,6 @@ func (s *SQLStorage) CreateMeasurement(m *models.Measurement) error {
 	}
 	m.ID = id
 	return nil
-}
-
-func (s *SQLStorage) GetAllMeasurements(filters map[string]string) ([]models.Measurement, error) {
-	query := "SELECT id, sensor, parameter, value, unit, timestamp, created_at FROM measurement"
-	var args []any
-
-	var conditions []string
-	i := 1
-	for key, value := range filters {
-		conditions = append(conditions, key+" = $"+strconv.Itoa(i))
-		args = append(args, value)
-		i++
-	}
-
-	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND ")
-	}
-
-	rows, err := s.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	measurements := []models.Measurement{}
-	for rows.Next() {
-		var mt models.Measurement
-		err := rows.Scan(&mt.ID, &mt.Sensor, &mt.Parameter, &mt.Value, &mt.Unit, &mt.Timestamp, &mt.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		measurements = append(measurements, mt)
-	}
-
-	return measurements, nil
 }
 
 func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.MeasurementCursor) ([]models.Measurement, error) {
@@ -80,16 +44,16 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 
 	// Forward pagination: everything "after" the cursor in a DESC order
 	if after != nil {
-		where = "WHERE (created_at < ? OR (created_at = ? AND id < ?))"
+		where = "WHERE (created_at_unix < ? OR (created_at_unix = ? AND id < ?))"
 		args = append(args, after.CreatedAt, after.CreatedAt, after.ID)
 	}
 
 	// Always keep the ORDER BY stable and matching the index
 	q := `
-		SELECT id, sensor, parameter, value, unit, timestamp, created_at
+		SELECT id, sensor, parameter, value, unit, timestamp_unix, created_at_unix
 		FROM measurement
 		` + where + `
-		ORDER BY created_at DESC, id DESC
+		ORDER BY created_at_unix DESC, id DESC
 		LIMIT ?
 	`
 	args = append(args, limit+1)
@@ -103,11 +67,14 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 	out := []models.Measurement{}
 	for rows.Next() {
 		var m models.Measurement
+		var tsUnix, createdAtUnix int64
 		if err := rows.Scan(
-			&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &m.Timestamp, &m.CreatedAt,
+			&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix,
 		); err != nil {
 			return nil, err
 		}
+		m.Timestamp = time.Unix(tsUnix, 0)
+		m.CreatedAt = time.Unix(createdAtUnix, 0)
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -137,7 +104,7 @@ func (s *SQLStorage) GetMeasurementsAfterID(ctx context.Context, afterID int64, 
 	}
 
 	q := `
-        SELECT id, sensor, COALESCE(parameter, ''), value, unit, timestamp, created_at
+        SELECT id, sensor, COALESCE(parameter, ''), value, unit, timestamp_unix, created_at_unix
         FROM measurement
         WHERE id > ?
         ORDER BY id ASC
@@ -153,9 +120,12 @@ func (s *SQLStorage) GetMeasurementsAfterID(ctx context.Context, afterID int64, 
 	outID := afterID
 	for rows.Next() {
 		var m models.Measurement
-		if err := rows.Scan(&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &m.Timestamp, &m.CreatedAt); err != nil {
+		var tsUnix, createdAtUnix int64
+		if err := rows.Scan(&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix); err != nil {
 			return nil, afterID, err
 		}
+		m.Timestamp = time.Unix(tsUnix, 0)
+		m.CreatedAt = time.Unix(createdAtUnix, 0)
 		out = append(out, m)
 		outID = m.ID
 	}

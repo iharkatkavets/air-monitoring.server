@@ -20,12 +20,12 @@ type MeasurementHandler struct {
 	errorLog       *log.Logger
 	storage        *storage.SQLStorage
 	settings       *settings.SettingsCache
-	lastRecordTime time.Time
+	prevRecordTime time.Time
 }
 
 func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *MeasurementHandler {
-	lastRecordTime := time.Now().Add(settings.GetStoreInterval())
-	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, lastRecordTime: lastRecordTime}
+	prevRecordTime := time.Now().Add(-settings.GetStoreInterval())
+	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, prevRecordTime: prevRecordTime}
 }
 
 type CreateMeasurementReq struct {
@@ -48,35 +48,44 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := make([]models.Measurement, 0, len(req.Values))
-	createdAt := time.Now().UTC()
-	currTimestamp := createdAt
-	for _, v := range req.Values {
-		var m models.Measurement
-		ts := req.Timestamp
-		if ts.IsZero() {
-			ts = currTimestamp
-		}
-		m.Timestamp = ts
-		m.Parameter = v.Parameter
-		m.Value = v.Value
-		m.Unit = v.Unit
-		m.Sensor = v.Sensor
-		m.CreatedAt = createdAt
+	currTimestamp := time.Now().UTC()
+	timeSincePrevAdd := currTimestamp.Sub(h.prevRecordTime)
+	storeInterval := h.settings.GetStoreInterval()
+	if timeSincePrevAdd >= storeInterval {
+		h.prevRecordTime = currTimestamp
+		response := make([]models.Measurement, 0, len(req.Values))
+		for _, v := range req.Values {
+			var m models.Measurement
+			ts := req.Timestamp
+			if ts.IsZero() {
+				ts = currTimestamp
+			}
+			m.Timestamp = ts
+			m.Parameter = v.Parameter
+			m.Value = v.Value
+			m.Unit = v.Unit
+			m.Sensor = v.Sensor
+			m.CreatedAt = currTimestamp
 
-		if err := h.storage.CreateMeasurement(&m); err != nil {
+			if err := h.storage.CreateMeasurement(&m); err != nil {
+				h.errorLog.Println(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			response = append(response, m)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
 			h.errorLog.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
-		response = append(response, m)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.errorLog.Println(err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		remaining := storeInterval - timeSincePrevAdd
+		h.infoLog.Printf("Skip storing. remaining=%s elapsed=%s interval=%s", remaining.Round(time.Second), timeSincePrevAdd.Round(time.Second), storeInterval.Round(time.Second))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		http.NoBody.WriteTo(w)
 	}
 }
 

@@ -124,22 +124,22 @@ func (h *SettingsHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) 
 
 	switch key {
 	case settings.SettingKeyStoreInterval:
-		duration, err := strconv.ParseFloat(item.Value, 64)
+		seconds, err := strconv.ParseFloat(item.Value, 64)
 		if err != nil {
 			h.errorLog.Printf("Failed to parse store interval %s %v", item.Value, err)
 			http.Error(w, "Internal Server error", http.StatusInternalServerError)
 			return
 		}
-		h.settings.SetStoreInterval(time.Duration(duration))
+		h.settings.SetStoreInterval(time.Duration(seconds * float64(time.Second)))
 		h.infoLog.Printf("Apply new store interval %s", item.Value)
 	case settings.SettingKeyMaxAge:
-		duration, err := strconv.ParseFloat(item.Value, 64)
+		seconds, err := strconv.ParseFloat(item.Value, 64)
 		if err != nil {
 			h.errorLog.Printf("Failed to parse max age %s %v", item.Value, err)
 			http.Error(w, "Internal Server error", http.StatusInternalServerError)
 			return
 		}
-		h.settings.SetMaxAge(time.Duration(duration))
+		h.settings.SetMaxAge(time.Duration(seconds * float64(time.Second)))
 		h.infoLog.Printf("Apply new max age value %s", item.Value)
 	}
 

@@ -7,6 +7,6 @@ const (
 )
 
 var DefaultSettings = map[string]string{
-	SettingKeyMaxAge:        "2678400",
-	SettingKeyStoreInterval: "60",
+	SettingKeyMaxAge:        "2678400", // 60*60*24*31days
+	SettingKeyStoreInterval: "60",      // 60sec
 }

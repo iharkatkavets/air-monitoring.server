@@ -21,7 +21,7 @@ func (s *SQLStorage) InitDB(ctx context.Context) error {
 	if err := s.createTables(); err != nil {
 		return err
 	}
-	if err := s.createIndexes(); err != nil {
+	if err := s.createIndexByIDAndCreatedAtUnix(); err != nil {
 		return err
 	}
 	if err := s.EnsureDefaultSettings(ctx, settings.DefaultSettings); err != nil {
@@ -48,8 +48,8 @@ func (s *SQLStorage) createMeasurementTable() error {
         parameter STRING,
         value REAL NOT NULL,
         unit STRING NOT NULL,
-        timestamp DATETIME NOT NULL,
-        created_at DATETIME NOT NULL
+        timestamp_unix INTEGER NOT NULL,
+        created_at_unix INTEGER NOT NULL
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
@@ -65,7 +65,7 @@ func (s *SQLStorage) createSettingsTable() error {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         parameter TEXT,
-        updated_at DATETIME NOT NULL
+        updated_at_unix INTEGER NOT NULL
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
@@ -75,12 +75,12 @@ func (s *SQLStorage) createSettingsTable() error {
 	return nil
 }
 
-func (s *SQLStorage) createIndexes() error {
+func (s *SQLStorage) createIndexByIDAndCreatedAtUnix() error {
 	var count int
 	err := s.DB.QueryRow(`
 		SELECT COUNT(*) 
 		FROM pragma_table_info('measurement') 
-		WHERE name = 'created_at'
+		WHERE name = 'created_at_unix'
 	`).Scan(&count)
 	if err != nil {
 		return err
@@ -91,8 +91,8 @@ func (s *SQLStorage) createIndexes() error {
 	}
 
 	_, err = s.DB.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_measurement_created_id
-		ON measurement(created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_measurement_created_at_unix_id
+        ON measurement(created_at_unix DESC, id DESC);
 	`)
 	return err
 }
@@ -100,8 +100,8 @@ func (s *SQLStorage) createIndexes() error {
 func (s *SQLStorage) EnsureDefaultSettings(ctx context.Context, defaults map[string]string) error {
 	for key, value := range defaults {
 		query := `
-		INSERT INTO settings (key, value, updated_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO settings (key, value, updated_at_unix)
+		VALUES (?, ?, strftime('%s', 'now'))
 		ON CONFLICT(key) DO NOTHING;
 		`
 		if _, err := s.DB.ExecContext(ctx, query, key, value); err != nil {
