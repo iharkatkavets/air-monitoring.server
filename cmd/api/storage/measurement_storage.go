@@ -45,7 +45,8 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 	// Forward pagination: everything "after" the cursor in a DESC order
 	if after != nil {
 		where = "WHERE (created_at_unix < ? OR (created_at_unix = ? AND id < ?))"
-		args = append(args, after.CreatedAt, after.CreatedAt, after.ID)
+		cursorUnix := after.CreatedAt.UTC().Unix()
+		args = append(args, cursorUnix, cursorUnix, after.ID)
 	}
 
 	// Always keep the ORDER BY stable and matching the index

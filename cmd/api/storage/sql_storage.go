@@ -3,17 +3,21 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"log"
 	"sensor/cmd/api/settings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type SQLStorage struct {
-	DB *sql.DB
+	DB       *sql.DB
+	infoLog  *log.Logger
+	errorLog *log.Logger
 }
 
-func NewSQLStorage(db *sql.DB) *SQLStorage {
-	s := &SQLStorage{DB: db}
+func NewSQLStorage(db *sql.DB, infoLog *log.Logger, errorLog *log.Logger) *SQLStorage {
+	s := &SQLStorage{DB: db, infoLog: infoLog, errorLog: errorLog}
 	return s
 }
 
@@ -87,7 +91,8 @@ func (s *SQLStorage) createIndexByIDAndCreatedAtUnix() error {
 	}
 
 	if count == 0 {
-		return nil
+		s.errorLog.Println("Can't create index because colum 'created_at_unix' doesn't exist")
+		return errors.New("can't create index because column 'created_at_unix' doesn't exist")
 	}
 
 	_, err = s.DB.Exec(`

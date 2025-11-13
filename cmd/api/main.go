@@ -106,7 +106,7 @@ func main() {
 	}
 	defer database.Close()
 
-	store := storage.NewSQLStorage(database)
+	store := storage.NewSQLStorage(database, infoLog, errorLog)
 	ctx := context.Background()
 	if err := store.InitDB(ctx); err != nil {
 		errorLog.Println(err)
