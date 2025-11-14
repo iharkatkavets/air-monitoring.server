@@ -10,10 +10,48 @@ import (
 	"sensor/cmd/api/pagination"
 	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
+	"sync"
 	"time"
 
 	"strconv"
 )
+
+type SSEBroker struct {
+	clientChannels map[int]chan []models.Measurement
+	nextID         int
+	mutex          sync.RWMutex
+}
+
+func NewSSEBroker() *SSEBroker {
+	return &SSEBroker{clientChannels: make(map[int]chan []models.Measurement)}
+}
+
+func (b *SSEBroker) addClientChannel(ch chan []models.Measurement) int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	index := b.nextID
+	b.nextID += 1
+	b.clientChannels[index] = ch
+	return index
+}
+
+func (b *SSEBroker) removeAndCloseClientChannel(index int) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if channel, ok := b.clientChannels[index]; ok == true {
+		delete(b.clientChannels, index)
+		close(channel)
+	}
+}
+
+func (b *SSEBroker) notify(data []models.Measurement) {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	for _, channel := range b.clientChannels {
+		channel <- data
+	}
+}
 
 type MeasurementHandler struct {
 	infoLog        *log.Logger
@@ -21,11 +59,13 @@ type MeasurementHandler struct {
 	storage        *storage.SQLStorage
 	settings       *settings.SettingsCache
 	prevRecordTime time.Time
+	broker         *SSEBroker
 }
 
 func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *MeasurementHandler {
 	prevRecordTime := time.Now().Add(-settings.GetStoreInterval())
-	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, prevRecordTime: prevRecordTime}
+	broker := NewSSEBroker()
+	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, prevRecordTime: prevRecordTime, broker: broker}
 }
 
 type CreateMeasurementReq struct {
@@ -51,30 +91,32 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	currTimestamp := time.Now().UTC()
 	timeSincePrevAdd := currTimestamp.Sub(h.prevRecordTime)
 	storeInterval := h.settings.GetStoreInterval()
+
+	response := make([]models.Measurement, 0, len(req.Values))
+	for _, v := range req.Values {
+		var m models.Measurement
+		ts := req.Timestamp
+		if ts.IsZero() {
+			ts = currTimestamp
+		}
+		m.Timestamp = ts
+		m.Parameter = v.Parameter
+		m.Value = v.Value
+		m.Unit = v.Unit
+		m.Sensor = v.Sensor
+		m.CreatedAt = currTimestamp
+
+		if err := h.storage.CreateMeasurement(&m); err != nil {
+			h.errorLog.Println(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		response = append(response, m)
+	}
+	h.broker.notify(response)
+
 	if timeSincePrevAdd >= storeInterval {
 		h.prevRecordTime = currTimestamp
-		response := make([]models.Measurement, 0, len(req.Values))
-		for _, v := range req.Values {
-			var m models.Measurement
-			ts := req.Timestamp
-			if ts.IsZero() {
-				ts = currTimestamp
-			}
-			m.Timestamp = ts
-			m.Parameter = v.Parameter
-			m.Value = v.Value
-			m.Unit = v.Unit
-			m.Sensor = v.Sensor
-			m.CreatedAt = currTimestamp
-
-			if err := h.storage.CreateMeasurement(&m); err != nil {
-				h.errorLog.Println(err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			response = append(response, m)
-		}
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -142,7 +184,7 @@ func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type SSEData struct {
+type sseData struct {
 	Items []models.Measurement `json:"items"`
 }
 
@@ -163,32 +205,25 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	defer h.infoLog.Println("A client has disconnected")
+	dataChan := make(chan []models.Measurement)
+	clientID := h.broker.addClientChannel(dataChan)
+
+	defer func() {
+		h.broker.removeAndCloseClientChannel(clientID)
+		h.infoLog.Println("A client has disconnected")
+	}()
 
 	ctx := r.Context()
-
-	lastID, err := h.storage.GetLastID()
-	if err != nil {
-		h.errorLog.Printf("Failed to fetch id from database %v", err.Error())
-		http.Error(w, "internal erro", http.StatusInternalServerError)
-		return
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			measurements, outID, err := h.storage.GetMeasurementsAfterID(ctx, lastID, 100)
-			if err != nil {
-				h.errorLog.Printf("Failed to fetch measurements %v", err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+		case measurements := <-dataChan:
 			if len(measurements) == 0 {
 				continue
 			}
-			b, err := json.Marshal(SSEData{Items: measurements})
+			b, err := json.Marshal(sseData{Items: measurements})
 			if err != nil {
 				h.errorLog.Printf("Failed to encode measurements to JSON %v", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -199,7 +234,8 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-			lastID = outID
+		case <-ticker.C:
+			h.infoLog.Println("The connection is alive")
 		}
 	}
 }
