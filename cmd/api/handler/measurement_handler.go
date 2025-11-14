@@ -38,7 +38,7 @@ func (b *SSEBroker) addClientChannel(ch chan []models.Measurement) int {
 func (b *SSEBroker) removeAndCloseClientChannel(index int) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	if channel, ok := b.clientChannels[index]; ok == true {
+	if channel, ok := b.clientChannels[index]; ok {
 		delete(b.clientChannels, index)
 		close(channel)
 	}
@@ -189,7 +189,9 @@ type sseData struct {
 }
 
 func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
-	h.infoLog.Println("A client has connected")
+	dataChan := make(chan []models.Measurement)
+	clientID := h.broker.addClientChannel(dataChan)
+	h.infoLog.Printf("A client %d has connected", clientID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -205,12 +207,9 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	dataChan := make(chan []models.Measurement)
-	clientID := h.broker.addClientChannel(dataChan)
-
 	defer func() {
 		h.broker.removeAndCloseClientChannel(clientID)
-		h.infoLog.Println("A client has disconnected")
+		h.infoLog.Printf("A client %d has disconnected", clientID)
 	}()
 
 	ctx := r.Context()
@@ -235,7 +234,7 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-ticker.C:
-			h.infoLog.Println("The connection is alive")
+			h.infoLog.Printf("Client %d is alive", clientID)
 		}
 	}
 }
