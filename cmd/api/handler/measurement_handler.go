@@ -10,46 +10,69 @@ import (
 	"sensor/cmd/api/pagination"
 	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
-	"sync"
 	"time"
 
 	"strconv"
 )
 
+type SSEClient struct {
+	ch   chan []models.Measurement
+	done chan struct{}
+}
+
 type SSEBroker struct {
-	clientChannels map[int]chan []models.Measurement
-	nextID         int
-	mutex          sync.RWMutex
+	Notifier       chan []models.Measurement
+	newClients     chan *SSEClient
+	closingClients chan *SSEClient
+	clients        map[*SSEClient]struct{}
 }
 
 func NewSSEBroker() *SSEBroker {
-	return &SSEBroker{clientChannels: make(map[int]chan []models.Measurement)}
-}
-
-func (b *SSEBroker) addClientChannel(ch chan []models.Measurement) int {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	index := b.nextID
-	b.nextID += 1
-	b.clientChannels[index] = ch
-	return index
-}
-
-func (b *SSEBroker) removeAndCloseClientChannel(index int) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	if channel, ok := b.clientChannels[index]; ok {
-		delete(b.clientChannels, index)
-		close(channel)
+	return &SSEBroker{
+		Notifier:       make(chan []models.Measurement, 64),
+		newClients:     make(chan *SSEClient),
+		closingClients: make(chan *SSEClient),
+		clients:        make(map[*SSEClient]struct{}),
 	}
 }
 
-func (b *SSEBroker) notify(data []models.Measurement) {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
+func (b *SSEBroker) addClient() *SSEClient {
+	c := &SSEClient{ch: make(chan []models.Measurement, 32), done: make(chan struct{})}
+	b.newClients <- c
+	return c
+}
 
-	for _, channel := range b.clientChannels {
-		channel <- data
+func (b *SSEBroker) listen() {
+	for {
+		select {
+		case s := <-b.newClients:
+			b.clients[s] = struct{}{}
+			log.Printf("Client added. %d registered clients", len(b.clients))
+
+		case s := <-b.closingClients:
+			delete(b.clients, s)
+			close(s.ch)
+			select {
+			case s.done <- struct{}{}:
+			default:
+			}
+			log.Printf("Removed client. %d registered clients", len(b.clients))
+
+		case event := <-b.Notifier:
+			for c := range b.clients {
+				select {
+				case c.ch <- event:
+				default:
+					delete(b.clients, c)
+					close(c.ch)
+					select {
+					case c.done <- struct{}{}:
+					default:
+					}
+					log.Printf("Dropped slow client. %d registered clients", len(b.clients))
+				}
+			}
+		}
 	}
 }
 
@@ -65,7 +88,15 @@ type MeasurementHandler struct {
 func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *MeasurementHandler {
 	prevRecordTime := time.Now().Add(-settings.GetStoreInterval())
 	broker := NewSSEBroker()
-	return &MeasurementHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings, prevRecordTime: prevRecordTime, broker: broker}
+	go broker.listen()
+	return &MeasurementHandler{
+		infoLog:        infoLog,
+		errorLog:       errorLog,
+		storage:        storage,
+		settings:       settings,
+		prevRecordTime: prevRecordTime,
+		broker:         broker,
+	}
 }
 
 type CreateMeasurementReq struct {
@@ -113,7 +144,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		response = append(response, m)
 	}
-	h.broker.notify(response)
+	h.broker.Notifier <- response
 
 	if timeSincePrevAdd >= storeInterval {
 		h.prevRecordTime = currTimestamp
@@ -189,36 +220,44 @@ type sseData struct {
 }
 
 func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
-	dataChan := make(chan []models.Measurement)
-	clientID := h.broker.addClientChannel(dataChan)
-	h.infoLog.Printf("A client %d has connected", clientID)
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("X-Accel-Buffering", "no")
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
+	c := h.broker.addClient()
+	h.infoLog.Println("A client has connected")
+	defer func() {
+		h.broker.closingClients <- c
+		h.infoLog.Println("A client has disconnected")
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-
-	defer func() {
-		h.broker.removeAndCloseClientChannel(clientID)
-		h.infoLog.Printf("A client %d has disconnected", clientID)
-	}()
 
 	ctx := r.Context()
 
 	for {
 		select {
 		case <-ctx.Done():
+			h.infoLog.Println("ctx.Done()")
 			return
-		case measurements := <-dataChan:
+
+		case <-c.done:
+			h.infoLog.Println("c.done")
+			return
+
+		case measurements, ok := <-c.ch:
+			if !ok {
+				h.infoLog.Println("client channel closed")
+				return
+			}
 			if len(measurements) == 0 {
 				continue
 			}
@@ -233,8 +272,6 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case <-ticker.C:
-			h.infoLog.Printf("Client %d is alive", clientID)
 		}
 	}
 }
