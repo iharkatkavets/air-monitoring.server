@@ -7,34 +7,49 @@ import (
 	"time"
 
 	"context"
-	"database/sql"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Storage interface {
-	CreateMeasurement(m *models.Measurement) error
-	GetLastID() (int64, error)
-	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]models.Measurement, int64, error)
+	CreateMeasurement(ctx context.Context, m *models.Measurement) (MeasurementRecord, error)
+	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]MeasurementRecord, int64, error)
 }
 
-func (s *SQLStorage) CreateMeasurement(m *models.Measurement) error {
-	query := `INSERT INTO measurement 
-    (sensor, parameter, value, unit, timestamp_unix, created_at_unix) VALUES 
-    (?, ?, ?, ?, ?, ?)`
-	result, err := s.DB.Exec(query, m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp.UTC().Unix(), m.CreatedAt.UTC().Unix())
+type MeasurementRecord struct {
+	ID        int64     `json:"id"`
+	Sensor    string    `json:"sensor"`
+	Parameter *string   `json:"parameter,omitempty"`
+	Value     float64   `json:"value"`
+	Unit      string    `json:"unit"`
+	Timestamp time.Time `json:"timestamp"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *SQLStorage) CreateMeasurement(ctx context.Context, m *models.Measurement) (MeasurementRecord, error) {
+	result, err := s.DB.ExecContext(ctx,
+		`INSERT INTO measurement (sensor, parameter, value, unit, timestamp_unix, created_at_unix) 
+        VALUES (?, ?, ?, ?, ?, ?)`,
+		m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp.UTC().Unix(), m.CreatedAt.UTC().Unix())
 	if err != nil {
-		return err
+		return MeasurementRecord{}, err
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		return err
+		return MeasurementRecord{}, err
 	}
-	m.ID = id
-	return nil
+	return MeasurementRecord{
+		ID:        id,
+		Sensor:    m.Sensor,
+		Parameter: m.Parameter,
+		Value:     m.Value,
+		Unit:      m.Unit,
+		Timestamp: m.Timestamp,
+		CreatedAt: m.CreatedAt,
+	}, nil
 }
 
-func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.MeasurementCursor) ([]models.Measurement, error) {
+func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.MeasurementCursor) ([]MeasurementRecord, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -65,9 +80,9 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 	}
 	defer rows.Close()
 
-	out := []models.Measurement{}
+	out := []MeasurementRecord{}
 	for rows.Next() {
-		var m models.Measurement
+		var m MeasurementRecord
 		var tsUnix, createdAtUnix int64
 		if err := rows.Scan(
 			&m.ID, &m.Sensor, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix,
@@ -82,19 +97,4 @@ func (s *SQLStorage) GetMeasurementsPage(limit int, after *pagination.Measuremen
 		return nil, err
 	}
 	return out, nil
-}
-
-func (s *SQLStorage) GetLastID() (int64, error) {
-	q := `SELECT id FROM measurement ORDER BY id DESC LIMIT 1`
-	row := s.DB.QueryRow(q)
-
-	var id int64
-	err := row.Scan(&id)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	if err != nil {
-		return -1, err
-	}
-	return id, nil
 }

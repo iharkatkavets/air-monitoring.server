@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sensor/cmd/api/settings"
 	"time"
@@ -29,9 +30,10 @@ func (c *StorageCleaner) StartCleanupJob(ctx context.Context, interval time.Dura
 				c.infoLog.Println("Cleanup job stopped")
 				return
 			case <-ticker.C:
-				c.infoLog.Println("Run cleanup job")
-				if err := c.cleanupOnce(ctx); err != nil {
-					c.errLog.Printf("Cleanup job has failed with error %v", err)
+				c.infoLog.Println("Timer tick request cleanup op")
+				if err := c.performCleanup(ctx); err != nil {
+					c.errLog.Printf("Cleanup operation has failed with error %v", err)
+					break
 				}
 				c.infoLog.Println("Cleanup has finished")
 			}
@@ -39,10 +41,11 @@ func (c *StorageCleaner) StartCleanupJob(ctx context.Context, interval time.Dura
 	}()
 }
 
-func (c *StorageCleaner) cleanupOnce(ctx context.Context) error {
+func (c *StorageCleaner) performCleanup(ctx context.Context) error {
+	maxAge := c.settings.GetMaxAge()
+	cutOffTime := time.Now().UTC().Add(-maxAge)
+
 	for {
-		maxAge := c.settings.GetMaxAge()
-		cutOffTime := time.Now().UTC().Add(-maxAge)
 		res, err := c.storage.DB.ExecContext(ctx, `
         DELETE FROM measurement 
         WHERE id IN (
@@ -53,11 +56,11 @@ func (c *StorageCleaner) cleanupOnce(ctx context.Context) error {
         )
         `, cutOffTime.Unix())
 		if err != nil {
-			return err
+			return fmt.Errorf("cleanup delete measurements: %w", err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return err
+			return fmt.Errorf("cleanup rows affected: %w", err)
 		}
 		c.infoLog.Printf("Cleanup %d records with timestamp_unix before %s max_age %s", n, cutOffTime.Format(time.RFC3339), maxAge.Round(time.Second))
 		if n == 0 {

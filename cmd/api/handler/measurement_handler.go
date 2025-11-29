@@ -10,6 +10,7 @@ import (
 	"sensor/cmd/api/pagination"
 	"sensor/cmd/api/settings"
 	"sensor/cmd/api/storage"
+	"sync"
 	"time"
 
 	"strconv"
@@ -25,14 +26,18 @@ type SSEBroker struct {
 	newClients     chan *SSEClient
 	closingClients chan *SSEClient
 	clients        map[*SSEClient]struct{}
+	infoLog        *log.Logger
+	errorLog       *log.Logger
 }
 
-func NewSSEBroker() *SSEBroker {
+func NewSSEBroker(infoLog *log.Logger, errorLog *log.Logger) *SSEBroker {
 	return &SSEBroker{
 		Notifier:       make(chan []models.Measurement, 64),
 		newClients:     make(chan *SSEClient),
 		closingClients: make(chan *SSEClient),
 		clients:        make(map[*SSEClient]struct{}),
+		infoLog:        infoLog,
+		errorLog:       errorLog,
 	}
 }
 
@@ -47,7 +52,7 @@ func (b *SSEBroker) listen() {
 		select {
 		case s := <-b.newClients:
 			b.clients[s] = struct{}{}
-			log.Printf("Client added. %d registered clients", len(b.clients))
+			b.infoLog.Printf("Client added. %d registered clients", len(b.clients))
 
 		case s := <-b.closingClients:
 			delete(b.clients, s)
@@ -56,7 +61,7 @@ func (b *SSEBroker) listen() {
 			case s.done <- struct{}{}:
 			default:
 			}
-			log.Printf("Removed client. %d registered clients", len(b.clients))
+			b.infoLog.Printf("Removed client. %d registered clients", len(b.clients))
 
 		case event := <-b.Notifier:
 			for c := range b.clients {
@@ -69,7 +74,7 @@ func (b *SSEBroker) listen() {
 					case c.done <- struct{}{}:
 					default:
 					}
-					log.Printf("Dropped slow client. %d registered clients", len(b.clients))
+					b.infoLog.Printf("Dropped slow client. %d registered clients", len(b.clients))
 				}
 			}
 		}
@@ -82,12 +87,13 @@ type MeasurementHandler struct {
 	storage        *storage.SQLStorage
 	settings       *settings.SettingsCache
 	prevRecordTime time.Time
+	prevRecordMu   sync.Mutex
 	broker         *SSEBroker
 }
 
 func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *MeasurementHandler {
 	prevRecordTime := time.Now().Add(-settings.GetStoreInterval())
-	broker := NewSSEBroker()
+	broker := NewSSEBroker(infoLog, errorLog)
 	go broker.listen()
 	return &MeasurementHandler{
 		infoLog:        infoLog,
@@ -120,52 +126,68 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currTimestamp := time.Now().UTC()
-	timeSincePrevAdd := currTimestamp.Sub(h.prevRecordTime)
 	storeInterval := h.settings.GetStoreInterval()
+	ts := req.Timestamp
+	if ts.IsZero() {
+		ts = currTimestamp
+	}
+	h.prevRecordMu.Lock()
+	timeSincePrevAdd := currTimestamp.Sub(h.prevRecordTime)
+	shouldStore := timeSincePrevAdd >= storeInterval
+	if shouldStore {
+		h.prevRecordTime = currTimestamp
+	}
+	h.prevRecordMu.Unlock()
 
-	response := make([]models.Measurement, 0, len(req.Values))
+	sseResponse := make([]models.Measurement, 0, len(req.Values))
+	httpResponse := make([]storage.MeasurementRecord, 0, len(req.Values))
 	for _, v := range req.Values {
 		var m models.Measurement
-		ts := req.Timestamp
-		if ts.IsZero() {
-			ts = currTimestamp
-		}
 		m.Timestamp = ts
 		m.Parameter = v.Parameter
 		m.Value = v.Value
 		m.Unit = v.Unit
 		m.Sensor = v.Sensor
 		m.CreatedAt = currTimestamp
+		sseResponse = append(sseResponse, m)
 
-		if err := h.storage.CreateMeasurement(&m); err != nil {
-			h.errorLog.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if shouldStore {
+			record, err := h.storage.CreateMeasurement(r.Context(), &m)
+			if err != nil {
+				h.errorLog.Println(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			httpResponse = append(httpResponse, record)
 		}
-		response = append(response, m)
 	}
-	h.broker.Notifier <- response
+	h.broker.Notifier <- sseResponse
 
-	if timeSincePrevAdd >= storeInterval {
-		h.prevRecordTime = currTimestamp
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			h.errorLog.Println(err)
-		}
-	} else {
+	if !shouldStore {
 		remaining := storeInterval - timeSincePrevAdd
-		h.infoLog.Printf("Skip storing. remaining=%s elapsed=%s interval=%s", remaining.Round(time.Second), timeSincePrevAdd.Round(time.Second), storeInterval.Round(time.Second))
+		h.infoLog.Printf(
+			"Skip storing. remaining=%s elapsed=%s interval=%s",
+			remaining.Round(time.Second),
+			timeSincePrevAdd.Round(time.Second),
+			storeInterval.Round(time.Second),
+		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		http.NoBody.WriteTo(w)
+		_, _ = w.Write([]byte(`{"status":"skipped","reason":"interval_not_reached"}`))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(httpResponse); err != nil {
+		h.errorLog.Println(err)
 	}
 }
 
 type pageResponse struct {
-	Items      []models.Measurement `json:"items"`
-	NextCursor string               `json:"next_cursor,omitempty"`
-	HasMore    bool                 `json:"has_more"`
+	Items      []storage.MeasurementRecord `json:"items"`
+	NextCursor string                      `json:"next_cursor,omitempty"`
+	HasMore    bool                        `json:"has_more"`
 }
 
 func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -227,19 +249,14 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := h.broker.addClient()
-	h.infoLog.Println("A client has connected")
 	defer func() {
 		h.broker.closingClients <- c
-		h.infoLog.Println("A client has disconnected")
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
 
 	ctx := r.Context()
 
@@ -250,7 +267,7 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-c.done:
-			h.infoLog.Println("c.done")
+			h.infoLog.Println("client done")
 			return
 
 		case measurements, ok := <-c.ch:

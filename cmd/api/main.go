@@ -34,6 +34,7 @@ type application struct {
 	version  string
 	storage  *storage.SQLStorage
 	settings *settings.SettingsCache
+	cleaner  *storage.StorageCleaner
 }
 
 func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration) error {
@@ -46,11 +47,7 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		WriteTimeout:      0, // for SSE/Long Pooling
 	}
 
-	storageCleaner := storage.NewStorageCleaner(app.storage, app.infoLog, app.errorLog, app.settings)
-	storageCleaner.StartCleanupJob(ctx, time.Second*15)
-
 	serverErr := make(chan error, 1)
-
 	go func() {
 		app.infoLog.Printf("Starting %s server on %s (v%s)", app.config.env, srv.Addr, app.version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -58,6 +55,8 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		}
 		close(serverErr)
 	}()
+
+	app.cleaner.StartCleanupJob(ctx, time.Minute*5)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -83,7 +82,7 @@ func (app *application) serve(ctx context.Context, shutdownTimeout time.Duration
 		}
 		return err
 	}
-	app.infoLog.Println("Server shutdown gracefully")
+	app.infoLog.Println("Server shutteddown gracefully")
 
 	return nil
 }
@@ -122,6 +121,7 @@ func main() {
 	var settingsCache settings.SettingsCache
 	InitSettings(ctx, store, &settingsCache)
 
+	storageCleaner := storage.NewStorageCleaner(store, infoLog, errorLog, &settingsCache)
 	app := &application{
 		config:   cfg,
 		infoLog:  infoLog,
@@ -129,11 +129,12 @@ func main() {
 		version:  version,
 		storage:  store,
 		settings: &settingsCache,
+		cleaner:  storageCleaner,
 	}
 
 	shutdownTimeout := time.Second * 3
 	if err := app.serve(ctx, shutdownTimeout); err != nil {
-		app.errorLog.Println(err)
+		errorLog.Println(err)
 		errorLog.Fatal(err)
 	}
 
@@ -174,6 +175,7 @@ func InitSettings(ctx context.Context, storage *storage.SQLStorage, obj *setting
 				return fmt.Errorf("parse %s: %w", key, err)
 			}
 			obj.SetMaxAge(time.Duration(seconds * float64(time.Second)))
+
 		}
 	}
 	return nil

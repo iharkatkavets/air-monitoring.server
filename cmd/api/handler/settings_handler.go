@@ -37,7 +37,12 @@ type SettingsHandler struct {
 }
 
 func NewSettingsHandler(infoLog *log.Logger, errorLog *log.Logger, storage *storage.SQLStorage, settings *settings.SettingsCache) *SettingsHandler {
-	return &SettingsHandler{infoLog: infoLog, errorLog: errorLog, storage: storage, settings: settings}
+	return &SettingsHandler{
+		infoLog:  infoLog,
+		errorLog: errorLog,
+		storage:  storage,
+		settings: settings,
+	}
 }
 
 func (h *SettingsHandler) ListSettings(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +137,7 @@ func (h *SettingsHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) 
 		}
 		h.settings.SetStoreInterval(time.Duration(seconds * float64(time.Second)))
 		h.infoLog.Printf("Apply new store interval %s", item.Value)
+
 	case settings.SettingKeyMaxAge:
 		seconds, err := strconv.ParseFloat(item.Value, 64)
 		if err != nil {
@@ -139,8 +145,10 @@ func (h *SettingsHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "Internal Server error", http.StatusInternalServerError)
 			return
 		}
-		h.settings.SetMaxAge(time.Duration(seconds * float64(time.Second)))
+		duration := time.Duration(seconds * float64(time.Second))
+		h.settings.SetMaxAge(duration)
 		h.infoLog.Printf("Apply new max age value %s", item.Value)
+
 	}
 
 	resp := SettingResponseValue{Key: key, Value: item.Value, UpdatedAt: item.UpdatedAt}
