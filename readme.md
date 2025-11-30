@@ -38,3 +38,30 @@ curl -N http://localhost:4001/api/measurements/stream
 - Code lives in `cmd/api`: handlers in `handler/`, storage in `storage/`, models in `models/`, settings cache in `settings/`, pagination helpers in `pagination/`.
 - SQLite schema is created automatically on startup; defaults are populated from `settings.DefaultSettings`.
 - Tests: none yet; add `_test.go` files and run `go test ./...`.
+
+### `systemd` service configuration
+
+Create a file at `/etc/systemd/system/air-server.service`
+
+```ini
+[Unit]
+Description=Air monitoring server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/servers/air-monitoring
+ExecStart=/home/pi/servers/air-monitoring/server -port=4001 -db=/home/pi/servers/air-monitoring/storage.db -env=production
+Restart=always
+RestartSec=5
+User=pi
+Group=pi
+
+StartLimitBurst=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
