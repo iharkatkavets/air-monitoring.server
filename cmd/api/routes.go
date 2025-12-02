@@ -18,9 +18,9 @@ func (app *application) routes() http.Handler {
 	mux.Get("/slow", slowHandler.MakeItSlow)
 	mux.Get("/slow/{seconds}", slowHandler.MakeItSlow)
 	mux.Route("/api/measurements", func(r chi.Router) {
-		r.Get("/", measurementHandler.List)
-		r.Post("/", measurementHandler.Create)
-		r.Get("/stream", measurementHandler.Stream)
+		r.Get("/{sensor}", measurementHandler.List)
+		r.Post("/{sensor}", measurementHandler.Create)
+		r.Get("/{sensor}/stream", measurementHandler.Stream)
 	})
 	mux.Route("/api/settings", func(r chi.Router) {
 		r.Get("/", settingsHandler.ListSettings)

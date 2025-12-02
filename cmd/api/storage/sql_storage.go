@@ -48,13 +48,15 @@ func (s *SQLStorage) createMeasurementTable() error {
 	sqlCreate := `
     CREATE TABLE IF NOT EXISTS measurement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sensor STRING NOT NULL,
-        parameter STRING,
+        sensor TEXT NOT NULL,
+        sensor_id TEXT,
+        measurement TEXT NOT NULL,
+        parameter TEXT,
         value REAL NOT NULL,
-        unit STRING NOT NULL,
+        unit TEXT,
         timestamp_unix INTEGER NOT NULL,
         created_at_unix INTEGER NOT NULL
-    )
+    );
     `
 	_, err := s.DB.Exec(sqlCreate)
 	if err != nil {

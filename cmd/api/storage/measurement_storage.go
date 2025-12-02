@@ -12,25 +12,28 @@ import (
 )
 
 type Storage interface {
-	CreateMeasurement(ctx context.Context, m *models.Measurement) (MeasurementRecord, error)
+	CreateMeasurement(ctx context.Context, sensor string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error)
 	GetMeasurementsAfterID(ctx context.Context, afterID int64, limit int) ([]MeasurementRecord, int64, error)
 }
 
 type MeasurementRecord struct {
-	ID        int64     `json:"id"`
-	Sensor    string    `json:"sensor"`
-	Parameter *string   `json:"parameter,omitempty"`
-	Value     float64   `json:"value"`
-	Unit      string    `json:"unit"`
-	Timestamp time.Time `json:"timestamp"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int64     `json:"id"`
+	Sensor      string    `json:"sensor"`
+	SensorID    *string   `json:"sensor_id,omitempty"`
+	Measurement string    `json:"measurement"`
+	Parameter   *string   `json:"parameter"`
+	Value       float64   `json:"value"`
+	Unit        *string   `json:"unit"`
+	Timestamp   time.Time `json:"timestamp"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (s *SQLStorage) CreateMeasurement(ctx context.Context, m *models.Measurement) (MeasurementRecord, error) {
+func (s *SQLStorage) CreateMeasurement(ctx context.Context, sensor string, sensorID *string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error) {
+	currTimestamp := time.Now().UTC()
 	result, err := s.DB.ExecContext(ctx,
-		`INSERT INTO measurement (sensor, parameter, value, unit, timestamp_unix, created_at_unix) 
-        VALUES (?, ?, ?, ?, ?, ?)`,
-		m.Sensor, m.Parameter, m.Value, m.Unit, m.Timestamp.UTC().Unix(), m.CreatedAt.UTC().Unix())
+		`INSERT INTO measurement (sensor, sensor_id, measurement, parameter, value, unit, timestamp_unix, created_at_unix) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		sensor, sensorID, m.Measurement, m.Parameter, m.Value, m.Unit, timestamp.Unix(), currTimestamp.Unix())
 	if err != nil {
 		return MeasurementRecord{}, err
 	}
@@ -39,13 +42,15 @@ func (s *SQLStorage) CreateMeasurement(ctx context.Context, m *models.Measuremen
 		return MeasurementRecord{}, err
 	}
 	return MeasurementRecord{
-		ID:        id,
-		Sensor:    m.Sensor,
-		Parameter: m.Parameter,
-		Value:     m.Value,
-		Unit:      m.Unit,
-		Timestamp: m.Timestamp,
-		CreatedAt: m.CreatedAt,
+		ID:          id,
+		Sensor:      sensor,
+		SensorID:    sensorID,
+		Measurement: m.Measurement,
+		Parameter:   m.Parameter,
+		Value:       m.Value,
+		Unit:        m.Unit,
+		Timestamp:   timestamp,
+		CreatedAt:   currTimestamp,
 	}, nil
 }
 

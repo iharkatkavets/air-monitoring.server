@@ -14,15 +14,23 @@ import (
 	"time"
 
 	"strconv"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type SSEClient struct {
-	ch   chan []models.Measurement
-	done chan struct{}
+	sensor string
+	ch     chan []models.MeasurementSSE
+	done   chan struct{}
+}
+
+type MeasurementEvent struct {
+	sensor       string
+	measurements []models.MeasurementSSE
 }
 
 type SSEBroker struct {
-	Notifier       chan []models.Measurement
+	Notifier       chan MeasurementEvent
 	newClients     chan *SSEClient
 	closingClients chan *SSEClient
 	clients        map[*SSEClient]struct{}
@@ -32,7 +40,7 @@ type SSEBroker struct {
 
 func NewSSEBroker(infoLog *log.Logger, errorLog *log.Logger) *SSEBroker {
 	return &SSEBroker{
-		Notifier:       make(chan []models.Measurement, 64),
+		Notifier:       make(chan MeasurementEvent, 64),
 		newClients:     make(chan *SSEClient),
 		closingClients: make(chan *SSEClient),
 		clients:        make(map[*SSEClient]struct{}),
@@ -41,8 +49,8 @@ func NewSSEBroker(infoLog *log.Logger, errorLog *log.Logger) *SSEBroker {
 	}
 }
 
-func (b *SSEBroker) addClient() *SSEClient {
-	c := &SSEClient{ch: make(chan []models.Measurement, 32), done: make(chan struct{})}
+func (b *SSEBroker) addClient(sensor string) *SSEClient {
+	c := &SSEClient{sensor: sensor, ch: make(chan []models.MeasurementSSE, 32), done: make(chan struct{})}
 	b.newClients <- c
 	return c
 }
@@ -65,8 +73,11 @@ func (b *SSEBroker) listen() {
 
 		case event := <-b.Notifier:
 			for c := range b.clients {
+				if c.sensor != event.sensor {
+					continue
+				}
 				select {
-				case c.ch <- event:
+				case c.ch <- event.measurements:
 				default:
 					delete(b.clients, c)
 					close(c.ch)
@@ -105,22 +116,20 @@ func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *s
 	}
 }
 
-type CreateMeasurementReq struct {
-	Timestamp time.Time          `json:"timestamp"`
-	Values    []MeasurementValue `json:"values"`
-}
-
-type MeasurementValue struct {
-	Sensor    string  `json:"sensor"`
-	Parameter *string `json:"parameter,omitempty"` // nil for particle_size
-	Value     float64 `json:"value"`
-	Unit      string  `json:"unit"`
-}
+const pathParamSensor = "sensor"
 
 func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req CreateMeasurementReq
+	sensor := chi.URLParam(r, pathParamSensor)
+
+	var req models.CreateMeasurementReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.errorLog.Println(err)
+		// improve error response here
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	values, err := req.ExtractValues()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -139,20 +148,20 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	h.prevRecordMu.Unlock()
 
-	sseResponse := make([]models.Measurement, 0, len(req.Values))
-	httpResponse := make([]storage.MeasurementRecord, 0, len(req.Values))
-	for _, v := range req.Values {
-		var m models.Measurement
-		m.Timestamp = ts
+	sseResponse := make([]models.MeasurementSSE, 0, len(values))
+	httpResponse := make([]storage.MeasurementRecord, 0, len(values))
+	for _, v := range values {
+		var m models.MeasurementSSE
+		m.SensorID = req.SensorID
+		m.Measurement = v.Measurement
 		m.Parameter = v.Parameter
 		m.Value = v.Value
 		m.Unit = v.Unit
-		m.Sensor = v.Sensor
-		m.CreatedAt = currTimestamp
+		m.Timestamp = ts
 		sseResponse = append(sseResponse, m)
 
 		if shouldStore {
-			record, err := h.storage.CreateMeasurement(r.Context(), &m)
+			record, err := h.storage.CreateMeasurement(r.Context(), sensor, req.SensorID, &v, currTimestamp)
 			if err != nil {
 				h.errorLog.Println(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,7 +170,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 			httpResponse = append(httpResponse, record)
 		}
 	}
-	h.broker.Notifier <- sseResponse
+	h.broker.Notifier <- MeasurementEvent{sensor: sensor, measurements: sseResponse}
 
 	if !shouldStore {
 		remaining := storeInterval - timeSincePrevAdd
@@ -238,17 +247,19 @@ func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 type sseData struct {
-	Items []models.Measurement `json:"items"`
+	Items []models.MeasurementSSE `json:"items"`
 }
 
 func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
+	sensor := chi.URLParam(r, pathParamSensor)
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
-	c := h.broker.addClient()
+	c := h.broker.addClient(sensor)
 	defer func() {
 		h.broker.closingClients <- c
 	}()
