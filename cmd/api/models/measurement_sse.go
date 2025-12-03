@@ -6,7 +6,8 @@ import (
 )
 
 type MeasurementSSE struct {
-	SensorID    *string   `json:"sensor_id,omitempty"`
+	SensorID    *string   `json:"sensor_id"`
+	Sensor      *string   `json:"sensor"`
 	Measurement string    `json:"measurement"`
 	Parameter   *string   `json:"parameter,omitempty"`
 	Value       float64   `json:"value"`

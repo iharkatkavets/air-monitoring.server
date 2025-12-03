@@ -15,13 +15,13 @@ type MeasurementValue struct {
 }
 
 type CreateMeasurementReq struct {
-	SensorID  *string   `json:"sensor_id,omitempty"`
+	Sensor    *string   `json:"sensor"`
 	Timestamp time.Time `json:"timestamp,omitempty"`
 	// Single measurement
-	Measurement *string  `json:"measurement,omitempty"`
-	Parameter   *string  `json:"parameter,omitempty"`
-	Value       *float64 `json:"value,omitempty"`
-	Unit        *string  `json:"unit,omitempty"`
+	Measurement *string `json:"measurement,omitempty"`
+	Parameter   *string `json:"parameter,omitempty"`
+	Value       float64 `json:"value,omitempty"`
+	Unit        *string `json:"unit,omitempty"`
 	// Multi measurements
 	Measurements []MeasurementValue `json:"measurements,omitempty"`
 }
@@ -29,12 +29,8 @@ type CreateMeasurementReq struct {
 var ErrBadPayload = errors.New("invalid measurement payload")
 
 func (r *CreateMeasurementReq) ExtractValues() ([]MeasurementValue, error) {
-	if r.Timestamp.IsZero() {
-		return nil, fmt.Errorf("%w: timestamp is required", ErrBadPayload)
-	}
-
 	if len(r.Measurements) > 0 {
-		if r.Measurement != nil || r.Parameter != nil || r.Value != nil || r.Unit != nil {
+		if r.Measurement != nil || r.Parameter != nil || r.Unit != nil {
 			return nil, fmt.Errorf("%w: cannot mix single fields with 'measurements' array", ErrBadPayload)
 		}
 		for i, m := range r.Measurements {
@@ -45,7 +41,7 @@ func (r *CreateMeasurementReq) ExtractValues() ([]MeasurementValue, error) {
 		return r.Measurements, nil
 	}
 
-	if r.Measurement == nil || r.Value == nil {
+	if r.Measurement == nil {
 		return nil, fmt.Errorf("%w: measurement, parameter, value and unit are required for single payload", ErrBadPayload)
 	}
 
@@ -53,7 +49,7 @@ func (r *CreateMeasurementReq) ExtractValues() ([]MeasurementValue, error) {
 		{
 			Measurement: *r.Measurement,
 			Parameter:   r.Parameter,
-			Value:       *r.Value,
+			Value:       r.Value,
 			Unit:        r.Unit,
 		},
 	}, nil

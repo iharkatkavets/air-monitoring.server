@@ -19,13 +19,13 @@ import (
 )
 
 type SSEClient struct {
-	sensor string
-	ch     chan []models.MeasurementSSE
-	done   chan struct{}
+	sensorID string
+	ch       chan []models.MeasurementSSE
+	done     chan struct{}
 }
 
 type MeasurementEvent struct {
-	sensor       string
+	sensorID     string
 	measurements []models.MeasurementSSE
 }
 
@@ -49,8 +49,8 @@ func NewSSEBroker(infoLog *log.Logger, errorLog *log.Logger) *SSEBroker {
 	}
 }
 
-func (b *SSEBroker) addClient(sensor string) *SSEClient {
-	c := &SSEClient{sensor: sensor, ch: make(chan []models.MeasurementSSE, 32), done: make(chan struct{})}
+func (b *SSEBroker) addClient(sensorID string) *SSEClient {
+	c := &SSEClient{sensorID: sensorID, ch: make(chan []models.MeasurementSSE, 32), done: make(chan struct{})}
 	b.newClients <- c
 	return c
 }
@@ -73,7 +73,7 @@ func (b *SSEBroker) listen() {
 
 		case event := <-b.Notifier:
 			for c := range b.clients {
-				if c.sensor != event.sensor {
+				if c.sensorID != event.sensorID {
 					continue
 				}
 				select {
@@ -116,10 +116,10 @@ func NewMeasurementHandler(infoLog *log.Logger, errorLog *log.Logger, storage *s
 	}
 }
 
-const pathParamSensor = "sensor"
+const pathParamSensorID = "sensor_id"
 
 func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
-	sensor := chi.URLParam(r, pathParamSensor)
+	sensorID := chi.URLParam(r, pathParamSensorID)
 
 	var req models.CreateMeasurementReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -130,6 +130,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := req.ExtractValues()
 	if err != nil {
+		h.errorLog.Println(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -152,7 +153,8 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	httpResponse := make([]storage.MeasurementRecord, 0, len(values))
 	for _, v := range values {
 		var m models.MeasurementSSE
-		m.SensorID = req.SensorID
+		m.SensorID = &sensorID
+		m.Sensor = req.Sensor
 		m.Measurement = v.Measurement
 		m.Parameter = v.Parameter
 		m.Value = v.Value
@@ -161,7 +163,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sseResponse = append(sseResponse, m)
 
 		if shouldStore {
-			record, err := h.storage.CreateMeasurement(r.Context(), sensor, req.SensorID, &v, currTimestamp)
+			record, err := h.storage.CreateMeasurement(r.Context(), &sensorID, req.Sensor, &v, currTimestamp)
 			if err != nil {
 				h.errorLog.Println(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -170,7 +172,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 			httpResponse = append(httpResponse, record)
 		}
 	}
-	h.broker.Notifier <- MeasurementEvent{sensor: sensor, measurements: sseResponse}
+	h.broker.Notifier <- MeasurementEvent{sensorID: sensorID, measurements: sseResponse}
 
 	if !shouldStore {
 		remaining := storeInterval - timeSincePrevAdd
@@ -199,7 +201,8 @@ type pageResponse struct {
 	HasMore    bool                        `json:"has_more"`
 }
 
-func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
+func (h *MeasurementHandler) Get(w http.ResponseWriter, r *http.Request) {
+	sensorID := chi.URLParam(r, pathParamSensorID)
 	limit := 50
 	if s := r.URL.Query().Get("limit"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 200 {
@@ -217,7 +220,7 @@ func (h *MeasurementHandler) List(w http.ResponseWriter, r *http.Request) {
 		cur = &c
 	}
 
-	items, err := h.storage.GetMeasurementsPage(limit, cur)
+	items, err := h.storage.GetMeasurementsPage(sensorID, limit, cur)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -251,7 +254,7 @@ type sseData struct {
 }
 
 func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
-	sensor := chi.URLParam(r, pathParamSensor)
+	sensorID := chi.URLParam(r, pathParamSensorID)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -259,7 +262,7 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := h.broker.addClient(sensor)
+	c := h.broker.addClient(sensorID)
 	defer func() {
 		h.broker.closingClients <- c
 	}()
