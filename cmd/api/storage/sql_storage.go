@@ -38,7 +38,10 @@ func (s *SQLStorage) createTables() error {
 	if err := s.createMeasurementTable(); err != nil {
 		return err
 	}
-	if err := s.createSettingsTable(); err != nil {
+	if err := s.createSettingTable(); err != nil {
+		return err
+	}
+	if err := s.createSensorTable(); err != nil {
 		return err
 	}
 	return nil
@@ -48,7 +51,7 @@ func (s *SQLStorage) createMeasurementTable() error {
 	sqlCreate := `
     CREATE TABLE IF NOT EXISTS measurement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sensor TEXT NOT NULL,
+        sensor_name TEXT NOT NULL,
         sensor_id TEXT,
         measurement TEXT NOT NULL,
         parameter TEXT,
@@ -65,13 +68,28 @@ func (s *SQLStorage) createMeasurementTable() error {
 	return nil
 }
 
-func (s *SQLStorage) createSettingsTable() error {
+func (s *SQLStorage) createSettingTable() error {
 	sqlCreate := `
-    CREATE TABLE IF NOT EXISTS settings (
+    CREATE TABLE IF NOT EXISTS setting (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         parameter TEXT,
         updated_at_unix INTEGER NOT NULL
+    )
+    `
+	_, err := s.DB.Exec(sqlCreate)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLStorage) createSensorTable() error {
+	sqlCreate := `
+    CREATE TABLE IF NOT EXISTS sensor (
+        sensor_id TEXT PRIMARY KEY,
+        sensor_name TEXT NOT NULL,
+        last_seen_unix INTEGER NOT NULL
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
@@ -107,7 +125,7 @@ func (s *SQLStorage) createIndexByIDAndCreatedAtUnix() error {
 func (s *SQLStorage) EnsureDefaultSettings(ctx context.Context, defaults map[string]string) error {
 	for key, value := range defaults {
 		query := `
-		INSERT INTO settings (key, value, updated_at_unix)
+		INSERT INTO setting (key, value, updated_at_unix)
 		VALUES (?, ?, strftime('%s', 'now'))
 		ON CONFLICT(key) DO NOTHING;
 		`

@@ -15,8 +15,8 @@ type MeasurementValue struct {
 }
 
 type CreateMeasurementReq struct {
-	Sensor    *string   `json:"sensor"`
-	Timestamp time.Time `json:"timestamp,omitempty"`
+	SensorName string    `json:"sensor_name"`
+	Timestamp  time.Time `json:"timestamp,omitempty"`
 	// Single measurement
 	Measurement *string `json:"measurement,omitempty"`
 	Parameter   *string `json:"parameter,omitempty"`

@@ -135,6 +135,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
 	currTimestamp := time.Now().UTC()
 	storeInterval := h.settings.GetStoreInterval()
 	ts := req.Timestamp
@@ -154,7 +155,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	for _, v := range values {
 		var m models.MeasurementSSE
 		m.SensorID = &sensorID
-		m.Sensor = req.Sensor
+		m.SensorName = &req.SensorName
 		m.Measurement = v.Measurement
 		m.Parameter = v.Parameter
 		m.Value = v.Value
@@ -162,8 +163,10 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		m.Timestamp = ts
 		sseResponse = append(sseResponse, m)
 
+		h.storage.UpsertSensor(ctx, &sensorID, &req.SensorName, ts)
+
 		if shouldStore {
-			record, err := h.storage.CreateMeasurement(r.Context(), &sensorID, req.Sensor, &v, currTimestamp)
+			record, err := h.storage.CreateMeasurement(ctx, &sensorID, &req.SensorName, &v, currTimestamp)
 			if err != nil {
 				h.errorLog.Println(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)

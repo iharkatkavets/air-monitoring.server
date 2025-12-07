@@ -12,13 +12,13 @@ import (
 )
 
 type Storage interface {
-	CreateMeasurement(ctx context.Context, sensorID *string, sensor *string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error)
+	CreateMeasurement(ctx context.Context, sensorID *string, sensorName *string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error)
 	GetMeasurementsPage(sensorID string, limit int, after *pagination.MeasurementCursor) ([]MeasurementRecord, error)
 }
 
 type MeasurementRecord struct {
 	ID          int64     `json:"id"`
-	Sensor      *string   `json:"sensor"`
+	SensorName  *string   `json:"sensor_name"`
 	SensorID    *string   `json:"sensor_id"`
 	Measurement string    `json:"measurement"`
 	Parameter   *string   `json:"parameter,omitempty"`
@@ -28,12 +28,12 @@ type MeasurementRecord struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (s *SQLStorage) CreateMeasurement(ctx context.Context, sensorID *string, sensor *string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error) {
+func (s *SQLStorage) CreateMeasurement(ctx context.Context, sensorID, sensorName *string, m *models.MeasurementValue, timestamp time.Time) (MeasurementRecord, error) {
 	currTimestamp := time.Now().UTC()
 	result, err := s.DB.ExecContext(ctx,
-		`INSERT INTO measurement (sensor_id, sensor, measurement, parameter, value, unit, timestamp_unix, created_at_unix) 
+		`INSERT INTO measurement (sensor_id, sensor_name, measurement, parameter, value, unit, timestamp_unix, created_at_unix) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		sensorID, sensor, m.Measurement, m.Parameter, m.Value, m.Unit, timestamp.Unix(), currTimestamp.Unix())
+		sensorID, sensorName, m.Measurement, m.Parameter, m.Value, m.Unit, timestamp.Unix(), currTimestamp.Unix())
 	if err != nil {
 		return MeasurementRecord{}, err
 	}
@@ -43,7 +43,7 @@ func (s *SQLStorage) CreateMeasurement(ctx context.Context, sensorID *string, se
 	}
 	return MeasurementRecord{
 		ID:          id,
-		Sensor:      sensor,
+		SensorName:  sensorName,
 		SensorID:    sensorID,
 		Measurement: m.Measurement,
 		Parameter:   m.Parameter,
@@ -71,7 +71,7 @@ func (s *SQLStorage) GetMeasurementsPage(sensorID string, limit int, after *pagi
 
 	// Always keep the ORDER BY stable and matching the index
 	q := `
-		SELECT id, sensor_id, sensor, measurement, parameter, value, unit, timestamp_unix, created_at_unix
+		SELECT id, sensor_id, sensor_name, measurement, parameter, value, unit, timestamp_unix, created_at_unix
 		FROM measurement
 		` + where + `
 		ORDER BY created_at_unix DESC, id DESC
@@ -90,7 +90,7 @@ func (s *SQLStorage) GetMeasurementsPage(sensorID string, limit int, after *pagi
 		var m MeasurementRecord
 		var tsUnix, createdAtUnix int64
 		if err := rows.Scan(
-			&m.ID, &m.SensorID, &m.Sensor, &m.Measurement, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix,
+			&m.ID, &m.SensorID, &m.SensorName, &m.Measurement, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix,
 		); err != nil {
 			return nil, err
 		}
