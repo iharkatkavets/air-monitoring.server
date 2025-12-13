@@ -164,6 +164,7 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 		sseResponse = append(sseResponse, m)
 
 		h.storage.UpsertSensor(ctx, &sensorID, &req.SensorName, ts)
+		h.storage.UpdateSensorMeasurement(ctx, sensorID, v.Measurement)
 
 		if shouldStore {
 			record, err := h.storage.CreateMeasurement(ctx, &sensorID, &req.SensorName, &v, currTimestamp)
@@ -217,6 +218,7 @@ func (h *MeasurementHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if tok := r.URL.Query().Get("cursor"); tok != "" {
 		c, err := pagination.Decode(tok)
 		if err != nil {
+			h.infoLog.Println("bad cursor")
 			http.Error(w, "bad cursor", http.StatusBadRequest)
 			return
 		}
@@ -225,6 +227,7 @@ func (h *MeasurementHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.storage.GetMeasurementsPage(sensorID, limit, cur)
 	if err != nil {
+		h.infoLog.Println("Failed to get measurements page")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

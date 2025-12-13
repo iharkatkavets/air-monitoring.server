@@ -81,6 +81,7 @@ func (s *SQLStorage) GetMeasurementsPage(sensorID string, limit int, after *pagi
 
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
+		s.infoLog.Println("Failed to make Query")
 		return nil, err
 	}
 	defer rows.Close()
@@ -92,6 +93,7 @@ func (s *SQLStorage) GetMeasurementsPage(sensorID string, limit int, after *pagi
 		if err := rows.Scan(
 			&m.ID, &m.SensorID, &m.SensorName, &m.Measurement, &m.Parameter, &m.Value, &m.Unit, &tsUnix, &createdAtUnix,
 		); err != nil {
+			s.infoLog.Println("Failed Scan operation")
 			return nil, err
 		}
 		m.Timestamp = time.Unix(tsUnix, 0)
@@ -99,6 +101,7 @@ func (s *SQLStorage) GetMeasurementsPage(sensorID string, limit int, after *pagi
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
+		s.infoLog.Println("rows.Err != nil")
 		return nil, err
 	}
 	return out, nil

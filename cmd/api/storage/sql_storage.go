@@ -44,6 +44,9 @@ func (s *SQLStorage) createTables() error {
 	if err := s.createSensorTable(); err != nil {
 		return err
 	}
+	if err := s.createSensorMeasurementTable(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -90,6 +93,22 @@ func (s *SQLStorage) createSensorTable() error {
         sensor_id TEXT PRIMARY KEY,
         sensor_name TEXT NOT NULL,
         last_seen_unix INTEGER NOT NULL
+    )
+    `
+	_, err := s.DB.Exec(sqlCreate)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLStorage) createSensorMeasurementTable() error {
+	sqlCreate := `
+    CREATE TABLE IF NOT EXISTS sensor_measurement (
+        sensor_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        PRIMARY KEY (sensor_id, name),
+        FOREIGN KEY (sensor_id) REFERENCES sensor(sensor_id) ON DELETE CASCADE
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
