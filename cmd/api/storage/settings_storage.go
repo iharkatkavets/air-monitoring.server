@@ -20,7 +20,7 @@ type SettingsStorage interface {
 }
 
 func (s *SQLStorage) GetAllSettings(ctx context.Context) ([]SettingItem, error) {
-	query := `SELECT key, value, updated_at_unix FROM settings ORDER BY key`
+	query := `SELECT key, value, updated_at_unix FROM setting ORDER BY key`
 	rows, err := s.DB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -45,7 +45,7 @@ func (s *SQLStorage) GetAllSettings(ctx context.Context) ([]SettingItem, error) 
 }
 
 func (s *SQLStorage) GetSetting(ctx context.Context, key string) (*SettingItem, error) {
-	query := `SELECT key, value, updated_at_unix FROM settings WHERE key = ?`
+	query := `SELECT key, value, updated_at_unix FROM setting WHERE key = ?`
 	row := s.DB.QueryRowContext(ctx, query, key)
 	var item SettingItem
 	var updatedAtUnix int64
@@ -61,7 +61,7 @@ func (s *SQLStorage) GetSetting(ctx context.Context, key string) (*SettingItem, 
 
 func (s *SQLStorage) UpsertSetting(ctx context.Context, key, value string) (*SettingItem, error) {
 	query := `
-	INSERT INTO settings (key, value, updated_at_unix)
+	INSERT INTO setting (key, value, updated_at_unix)
 	VALUES (?, ?, strftime('%s', 'now'))
 	ON CONFLICT(key) DO UPDATE
 	SET value = excluded.value,
@@ -70,7 +70,7 @@ func (s *SQLStorage) UpsertSetting(ctx context.Context, key, value string) (*Set
 	if _, err := s.DB.ExecContext(ctx, query, key, value); err != nil {
 		return nil, err
 	}
-	row := s.DB.QueryRowContext(ctx, `SELECT key, value, updated_at_unix FROM settings WHERE key = ?`, key)
+	row := s.DB.QueryRowContext(ctx, `SELECT key, value, updated_at_unix FROM setting WHERE key = ?`, key)
 	var item SettingItem
 	var updatedAtUnix int64
 	if err := row.Scan(&item.Key, &item.Value, &updatedAtUnix); err != nil {

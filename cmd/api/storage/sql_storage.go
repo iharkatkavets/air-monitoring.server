@@ -38,7 +38,13 @@ func (s *SQLStorage) createTables() error {
 	if err := s.createMeasurementTable(); err != nil {
 		return err
 	}
-	if err := s.createSettingsTable(); err != nil {
+	if err := s.createSettingTable(); err != nil {
+		return err
+	}
+	if err := s.createSensorTable(); err != nil {
+		return err
+	}
+	if err := s.createSensorMeasurementTable(); err != nil {
 		return err
 	}
 	return nil
@@ -48,12 +54,30 @@ func (s *SQLStorage) createMeasurementTable() error {
 	sqlCreate := `
     CREATE TABLE IF NOT EXISTS measurement (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sensor STRING NOT NULL,
-        parameter STRING,
+        sensor_name TEXT NOT NULL,
+        sensor_id TEXT,
+        measurement TEXT NOT NULL,
+        parameter TEXT,
         value REAL NOT NULL,
-        unit STRING NOT NULL,
+        unit TEXT,
         timestamp_unix INTEGER NOT NULL,
         created_at_unix INTEGER NOT NULL
+    );
+    `
+	_, err := s.DB.Exec(sqlCreate)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLStorage) createSettingTable() error {
+	sqlCreate := `
+    CREATE TABLE IF NOT EXISTS setting (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        parameter TEXT,
+        updated_at_unix INTEGER NOT NULL
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
@@ -63,13 +87,28 @@ func (s *SQLStorage) createMeasurementTable() error {
 	return nil
 }
 
-func (s *SQLStorage) createSettingsTable() error {
+func (s *SQLStorage) createSensorTable() error {
 	sqlCreate := `
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        parameter TEXT,
-        updated_at_unix INTEGER NOT NULL
+    CREATE TABLE IF NOT EXISTS sensor (
+        sensor_id TEXT PRIMARY KEY,
+        sensor_name TEXT NOT NULL,
+        last_seen_unix INTEGER NOT NULL
+    )
+    `
+	_, err := s.DB.Exec(sqlCreate)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLStorage) createSensorMeasurementTable() error {
+	sqlCreate := `
+    CREATE TABLE IF NOT EXISTS sensor_measurement (
+        sensor_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        PRIMARY KEY (sensor_id, name),
+        FOREIGN KEY (sensor_id) REFERENCES sensor(sensor_id) ON DELETE CASCADE
     )
     `
 	_, err := s.DB.Exec(sqlCreate)
@@ -105,7 +144,7 @@ func (s *SQLStorage) createIndexByIDAndCreatedAtUnix() error {
 func (s *SQLStorage) EnsureDefaultSettings(ctx context.Context, defaults map[string]string) error {
 	for key, value := range defaults {
 		query := `
-		INSERT INTO settings (key, value, updated_at_unix)
+		INSERT INTO setting (key, value, updated_at_unix)
 		VALUES (?, ?, strftime('%s', 'now'))
 		ON CONFLICT(key) DO NOTHING;
 		`
