@@ -276,7 +276,13 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	if _, err := fmt.Fprintf(w, ": ok\n\n"); err != nil {
+		h.errorLog.Printf("Failed to write %v", err.Error())
+		return
+	}
+	flusher.Flush()
 
 	ctx := r.Context()
 
