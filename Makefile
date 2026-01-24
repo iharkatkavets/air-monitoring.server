@@ -3,13 +3,13 @@ DB   ?= "api.db"
 ENV  ?= "development"
 
 BIN_DIR := bin
-BIN := $(BIN_DIR)/air-server
+BIN     := $(BIN_DIR)/air-server
 
 LOG_DIR  := logs
 LOG      := $(LOG_DIR)/air-server.log
-PID := $(LOG_DIR)/air-server.pid
+PID      := $(LOG_DIR)/air-server.pid
 
-.PHONY: build clean release start stop logs
+.PHONY: build clean release start stop logs release_for_linux_on_mac
 
 $(BIN_DIR):
 	@mkdir -p $@
@@ -25,8 +25,19 @@ build: clean | $(BIN_DIR)
 	@go build -o $(BIN) ./cmd/api
 	@echo "[BUILD_API] Done"
 
-linux_release_on_mac: clean | $(BIN_DIR)
+release_for_linux_on_mac: clean | $(BIN_DIR)
 	@echo "[BUILD_RELEASE] Start"
+	@open -a Docker
+	@echo "Waiting for Docker..."
+	@timeout=60; \
+	while ! docker info >/dev/null 2>&1; do \
+		if [ $$timeout -le 0 ]; then \
+			echo "Docker did not start in time"; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+		timeout=$$((timeout-1)); \
+	done
 	@docker run --rm --platform linux/arm64 \
 		-v "$$PWD":/src -w /src golang:1.25-alpine \
 		/bin/sh -lc '\

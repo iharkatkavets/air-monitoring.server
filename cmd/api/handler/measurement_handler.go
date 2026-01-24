@@ -179,13 +179,13 @@ func (h *MeasurementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.broker.Notifier <- MeasurementEvent{sensorID: sensorID, measurements: sseResponse}
 
 	if !shouldStore {
-		remaining := storeInterval - timeSincePrevAdd
-		h.infoLog.Printf(
-			"Skip storing. remaining=%s elapsed=%s interval=%s",
-			remaining.Round(time.Second),
-			timeSincePrevAdd.Round(time.Second),
-			storeInterval.Round(time.Second),
-		)
+		// remaining := storeInterval - timeSincePrevAdd
+		// h.infoLog.Printf(
+		// 	"Skip storing. remaining=%s elapsed=%s interval=%s",
+		// 	remaining.Round(time.Second),
+		// 	timeSincePrevAdd.Round(time.Second),
+		// 	storeInterval.Round(time.Second),
+		// )
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"status":"skipped","reason":"interval_not_reached"}`))
@@ -270,7 +270,11 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 	c := h.broker.addClient(sensorID)
 	defer func() {
-		h.broker.closingClients <- c
+		select {
+		case h.broker.closingClients <- c:
+		default:
+			h.infoLog.Println("closingClients not ready; dropping")
+		}
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -278,11 +282,19 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+
 	if _, err := fmt.Fprintf(w, ": ok\n\n"); err != nil {
 		h.errorLog.Printf("Failed to write %v", err.Error())
 		return
 	}
 	flusher.Flush()
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	lastData := time.Now()
+	lastPing := time.Now()
+	pingInterval := 10 * time.Second
 
 	ctx := r.Context()
 
@@ -307,7 +319,6 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			b, err := json.Marshal(sseData{Items: measurements})
 			if err != nil {
 				h.errorLog.Printf("Failed to encode measurements to JSON %v", err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			if _, err := fmt.Fprintf(w, "event: measurements\ndata: %s\n\n", string(b)); err != nil {
@@ -315,6 +326,23 @@ func (h *MeasurementHandler) Stream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+			lastData = time.Now()
+
+		case <-ticker.C:
+			if time.Since(lastData) < pingInterval {
+				continue
+			}
+			if time.Since(lastPing) < pingInterval {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				h.errorLog.Printf("Failed to write %v", err.Error())
+				return
+			}
+			flusher.Flush()
+			now := time.Now()
+			lastData = now
+			lastPing = now
 		}
 	}
 }
